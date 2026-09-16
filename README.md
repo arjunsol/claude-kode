@@ -19,6 +19,11 @@ magnetic connector, optional Hacking Module).
 
 ## Status
 
+Personal-use tool for now - built for my own Kode Dot projects, with the
+intent to open it up for public use once it's mature enough to support
+that well. See `CONTEXT.md` for the project glossary and `docs/adr/` for
+the design decisions behind it.
+
 Early scaffold. Verified against the `kodediy` GitHub org and
 `docs.kode.diy` on 2026-09-16:
 
@@ -44,4 +49,10 @@ component repos, which are Apache-2.0.
 pio run -d templates/app -t upload
 ```
 
-or use `/new-kode-app <name>` to start a real project under `apps/`.
+or use `/new-kode-app <name>` to scaffold a real project wherever you're
+working. `examples/` in this repo holds our own dogfooding apps, not
+user projects - see `CONTEXT.md` for the template/example/app distinction.
+
+## License
+
+MIT - see `LICENSE`.
