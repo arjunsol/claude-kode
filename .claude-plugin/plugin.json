@@ -4,5 +4,6 @@
   "description": "Claude Code plugin and firmware tooling for developing kodeOS apps on the Kode Dot (ESP32-S3)",
   "homepage": "https://docs.kode.diy",
   "repository": "https://github.com/arjunsol/claude-kode",
+  "license": "MIT",
   "keywords": ["kode-dot", "kodeos", "esp32-s3", "platformio", "arduino"]
 }
