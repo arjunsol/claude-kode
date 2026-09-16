@@ -12,11 +12,12 @@ The on-device launcher/OS that turns a flashed firmware binary into a named, cat
 _Avoid_: firmware (too generic - kodeOS is specifically the launcher layer, not any given app's firmware).
 
 **App**:
-A firmware binary flashed to a Kode Dot and recognized by kodeOS's launcher. Identified today only by the `app_name` PlatformIO field - kodeOS's real manifest/lifecycle format (icon, category, lifecycle hooks) is not publicly documented.
-_Avoid_: project, sketch (both used loosely elsewhere in the ecosystem; here "app" means specifically the kodeOS-launcher-visible unit).
+A firmware binary flashed to a Kode Dot, named and filed into a category by the user on-device after flashing (see Category below). The `app_name` build field sets the flashed binary's filename via `rename_bin.py`; it is not a manifest and does not set the app's on-device name or category by itself.
+_Avoid_: project, sketch (both used loosely elsewhere in the ecosystem; here "app" means specifically the kodeOS-launcher-visible unit). Also avoid implying a manifest exists - see Category.
 
-**Manifest**:
-The (currently undocumented) format kodeOS would use to describe an app's icon, category, and lifecycle beyond its name. Only `app_name` is confirmed real; everything else about app packaging is an open gap, not something this project invents a format for.
+**Category**:
+The folder on the microSD card an app's files live in (default categories: General, Hacking, GPIO, USB, Games; user-creatable). This *is* kodeOS's entire categorization mechanism - assigned by the user on-device after flashing, sharing an app means copying files between category folders by hand. Confirmed (2026-09-17): kodeOS's launcher is closed-source (see ADR-0002) and there is no manifest file, icon mechanism, or lifecycle hook of any kind in the documented flow.
+_Avoid_: manifest, metadata file, app descriptor (none of these exist for kodeOS).
 
 **Template**:
 A copyable starting project under `templates/` in this repo. `/new-kode-app` scaffolds a new app from a template into wherever the user is working - not necessarily inside claude-kode itself.

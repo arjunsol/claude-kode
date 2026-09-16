@@ -37,16 +37,30 @@ Kode Dot project needs:
 **ESP-IDF** - vanilla ESP32-S3 IDF. No unified Kode SDK component; use the
 individual driver components listed below directly.
 
-## kodeOS app packaging (the big unknown)
+## kodeOS app packaging (confirmed: there is no manifest)
 
-Official docs (`docs.kode.diy/en/kodeOS/apps.md`) describe only the
-user-facing flow: you flash a binary, the launcher "transforms" it into an
-app shown under a category (General/Hacking/GPIO/USB/Games), backed by
-microSD storage. **There is no documented manifest schema, icon format, or
-app lifecycle API.** The `app_name` PlatformIO field is the only concrete
-signal found. Do not invent a manifest format and present it as real - flag
-this gap to the user if it matters for what they're building, and check
-`docs.kode.diy` for updates since this may get documented later.
+Confirmed by direct investigation (2026-09-17), not just absence of docs -
+see ADR-0002. kodeOS's launcher is **closed-source** (recovered only via a
+closed-source desktop app per `docs.kode.diy/en/kodeOS/firmware.md`), despite
+`docs.kode.diy/en/faq.md` claiming it's "completely free and open source" -
+that claim is unsupported by anything discoverable, worth flagging plainly
+rather than repeating it at face value.
+
+There is **no manifest, icon field, or lifecycle hook of any kind**. An
+app's identity is just:
+- **name** - typed by the user in the on-device "create application" flow
+  (the `app_name` PlatformIO field only sets the flashed binary's filename
+  via `rename_bin.py`; it is not read by the launcher as a display name)
+- **category** - literally the folder on the microSD card the app's files
+  live in (default: General/Hacking/GPIO/USB/Games, user-creatable);
+  sharing an app means copying files between category folders by hand
+
+Both are assigned on-device, after flashing, by the user - not by anything
+this toolchain writes. Do not invent a manifest format or automate
+name/category assignment: there is nothing on the wire to automate against.
+Tell the user this is a manual, on-device step if it matters for what
+they're building, and re-check `docs.kode.diy` in case kodediy ever
+open-sources the launcher or documents something more.
 
 ## Pin map
 
