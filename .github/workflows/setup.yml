@@ -1,0 +1,38 @@
+name: Cross-platform setup
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  host-setup:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: repo space
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo space
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Linux launcher
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash install.sh --host-only --state-dir "$RUNNER_TEMP/kode setup"
+      - name: macOS Finder launcher
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash install.command --host-only --no-pause --state-dir "$RUNNER_TEMP/kode setup"
+      - name: Windows launcher
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call install.cmd --host-only --state-dir "%RUNNER_TEMP%\kode setup"

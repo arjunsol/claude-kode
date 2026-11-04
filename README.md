@@ -35,6 +35,16 @@ No device is needed for research. Actual Claude Code activation and Windows
 compatibility still require interactive validation; see the
 [plugin development notes](docs/development/plugin-authoring.md).
 
+## Install development tools
+
+With Python 3.10+ and Git installed, double-click `install.cmd` on Windows or
+`install.command` on macOS. On Linux, run `bash install.sh`. The shared installer
+sets up Node, locked dependencies and pinned firmware tools without contacting
+a device. Use `--host-only` to skip firmware setup.
+
+See [the environment setup guide](docs/SETUP.md) for prerequisites, platform
+launchers, activation, retries and current validation limits.
+
 ## Development checks
 
 With Python 3.10 or newer:
@@ -43,8 +53,8 @@ With Python 3.10 or newer:
 python3 -m unittest discover -s tests -v
 ```
 
-These checks exercise the archived recipe's target restrictions; they do not
-build firmware or establish a host/device permission boundary.
+These checks cover the archive guard and installer integrity/error handling. They
+do not build firmware or establish a host/device permission boundary.
 
 For native firmware setup and emulator coverage, see the
 [firmware environment guide](docs/development/firmware-environment.md). ESP-IDF

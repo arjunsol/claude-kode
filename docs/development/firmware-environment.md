@@ -10,14 +10,17 @@ work additionally needs the sample's ESP-IDF **6.0.1**, matching RISC-V tools,
 CMake, Ninja and IDF's constrained Python dependencies. The historical S3
 PlatformIO environment is not this toolchain.
 
-The cloud setup script is `scripts/setup-firmware-env.sh`. It installs in
-`/workspace/toolchains` by default (override with `KODE_TOOLCHAIN_ROOT`). It checks
+The shared setup is documented in [SETUP.md](../SETUP.md), including Windows,
+macOS and Linux launchers. `scripts/setup-firmware-env.sh` delegates to its
+firmware-only mode. Tools default to a per-user directory; this cloud instance
+uses `KODE_TOOLCHAIN_ROOT=/workspace/toolchains` to reuse its installed SDK. It checks
 SDK commit `8c19b156084a0753687347cca1f5355782893533`, preserves existing edits,
 uses IDF's tool-manifest checksums and retains its official Python constraints.
 Do not use `--no-constraints` or disable TLS checks to get around access failures.
 
 ```sh
-bash scripts/setup-firmware-env.sh
+export KODE_TOOLCHAIN_ROOT=/workspace/toolchains
+bash install.sh --firmware-only --state-dir /workspace/toolchains/installer-state
 export IDF_TOOLS_PATH=/workspace/toolchains/esp-idf-tools-v6.0.1
 source /workspace/toolchains/esp-idf-v6.0.1/export.sh
 ```
