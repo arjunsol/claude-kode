@@ -11,7 +11,7 @@ Date: 2026-11-04. Status: in progress; production loader and hardware qualificat
 | S3 | https://github.com/kodediy/docs/tree/a55bd24d1f042ae397728ddb43935f8c1a7b56dc | en/introduction.mdx and en/kode-dot/esp32s3.mdx explicitly describe S3; current commit dated 2026-05-13 | Manufacturer documentation, generation-specific; retrieved 2026-11-04 |
 | S4 | Same docs revision; en/kodeOS/apps.mdx | Upload then run/create app; manual name/category and microSD category-folder sharing | Documents a historical flow; does not establish production P4 ABI/image format |
 | S5 | Same docs revision; en/kodeOS/firmware.mdx | kodeOS flash partition and desktop application/file-based recovery | No production-specific partition map or demonstrated recovery in this audit |
-| S6 | https://github.com/kodediy/kodedot_examples at ab05927fb72bdef90f1e11e1913b2adb88e65103 | Remote HEAD obtained only | Contents/licence not inspected this run; no code copied |
+| S6 | https://github.com/kodediy/kodedot_examples at ab05927fb72bdef90f1e11e1913b2adb88e65103 | Doom is a P4/C5 ESP-IDF example; PlantMonitor remains S3/Arduino | See the follow-up below for source and licence scope; no code copied |
 
 A recursive textual search of S3's checked-out files, excluding SVG/JSON/lock files, found no ESP32-P4, ESP32-C5 or ESP-AMP references. This bounded search does not prove the manufacturer has no production SDK elsewhere. Product website claims and the ESP-AMP issue referenced in PR #1 have not been independently revalidated here.
 
@@ -69,3 +69,15 @@ GitHub's public organisation listing at `https://github.com/orgs/kodediy/reposit
 `kodediy/bareiron` at `02733bee99289a9d2fe152d65bab82c7b3326767` was inspected in a temporary checkout. Its README describes a minimalist Minecraft server and generic ESP-IDF/PlatformIO compilation. Its licence file is GPLv3. The inspected README and targeted text search provided no production Kode loader contract; no source was copied. It is not a substitute for the missing production SDK.
 
 The product page remains blocked by proxy CONNECT 403. GitHub repository reads and pushes work, but both GraphQL and REST PR reads return Forbidden. Review branches can be pushed; API-based PR creation remains unavailable. No manufacturer outreach was sent.
+
+## P4 example found: Doom (user-provided source, 2026-11-04)
+
+The user pointed to `https://github.com/kodediy/kodedot_examples`. Inspection of its sole advertised branch, main at `ab05927fb72bdef90f1e11e1913b2adb88e65103`, establishes a concrete P4 build candidate. Previous statements about the repository's S3 material must not be generalised to every example.
+
+- [Doom/README.md](https://github.com/kodediy/kodedot_examples/blob/ab05927fb72bdef90f1e11e1913b2adb88e65103/Doom/README.md) explicitly distinguishes this ESP32-P4/native ESP-IDF example from the other S3/Arduino examples. It documents P4 with a C5 over esp_hosted, a MIPI-DSI CO5300 display and input hardware. These are documented claims, not physical observations from our audit. Upstream calls the board “v2”; the project continues using its chosen production P4/C5 terminology without treating that label as a verified board revision.
+- `Doom/sdkconfig.defaults` targets esp32p4 and ESP32-C5; `Doom/dependencies.lock` records ESP-IDF 6.0.1 and component hashes. The manifest pins esp_hosted to 2.12.9 and the README requires matching C5 slave firmware.
+- `Doom/main/CMakeLists.txt` unconditionally embeds `doom1.wad`. That asset is absent from the inspected checkout. Building this example unmodified requires a lawfully obtained, verified compatible asset; no placeholder WAD, disabled assertion or modified embed requirement counts as validating the original sample. No build has yet run.
+- `Doom/partitions_dev.csv` is explicitly a standalone development table. The README's flash command must not be treated as an approved kodeOS-preserving install route. `main/main.c` documents not changing the boot partition or validating rollback, but this alone does not establish a supported production loader contract or demonstrated recovery.
+- The subdirectory has its own `Doom/LICENSE`, a GPLv2 text; the README and port source state GPL-2.0-or-later. `components/doomgeneric/VENDORED.md` records upstream and patch provenance. ADR-0001's root/no-licence concern must not erase this explicitly licensed subdirectory; it also does not permit copying GPL code into an MIT-only template without satisfying its licence. No manufacturer code has been vendored here.
+
+Updated conclusion: a documented P4/C5 source example and build configuration **have been found**. A standalone production SDK release and a supported kodeOS app-loader API **have not been established**. Next build-only step is to verify the required game asset and set up the sample's pinned ESP-IDF 6.0.1 toolchain, then reproduce without flashing. Production identity, electrical qualification, supported kodeOS packaging and recovery remain open.
