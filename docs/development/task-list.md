@@ -13,6 +13,7 @@ hardware works. Physical release gates remain unmet.
 | Production hardware/revision and electrical contract | Blocked on evidence | Source-specific pin/power/module map and physical identity observation |
 | Production kodeOS app/loader contract | Integration source inspected | Arduino descriptor/mailbox/wrappers found; release compatibility, native IDF packaging and physical install/recovery unverified |
 | Backup/recovery procedure | Not demonstrated | Production assets and separately authorised physical test |
+| Native cloud firmware environment | Partially installed | IDF 6.0.1, P4 compiler, CMake and Ninja verified; constrained Python setup blocked by dl.espressif.com policy |
 | One reproducible P4 build-only sample | Candidate identified | Doom example targets IDF 6.0.1/P4; requires verified WAD asset and toolchain setup before build |
 | Versioned hardware profiles | Pending | Claim-level provenance, schema and invalidation/refusal tests |
 | ADR-0005 / ADR-0006 policy review | Pending | Explicit decision on refusal and operation authorisation |

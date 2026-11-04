@@ -46,6 +46,10 @@ python3 -m unittest discover -s tests -v
 These checks exercise the archived recipe's target restrictions; they do not
 build firmware or establish a host/device permission boundary.
 
+For native firmware setup and emulator coverage, see the
+[firmware environment guide](docs/development/firmware-environment.md). ESP-IDF
+setup is partially installed; its Python dependencies remain network-blocked.
+
 ## Decisions and next work
 
 [ADR-0004 and ADR-0009](docs/adr/README.md) accept versioned hardware profiles and
