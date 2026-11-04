@@ -4,3 +4,7 @@
 .vscode/
 *.bin
 apps/*/lib/
+
+__pycache__/
+node_modules/
+mcp/dist/

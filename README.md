@@ -1,58 +1,75 @@
 # claude-kode
 
-A Claude Code plugin, plus firmware tooling, for developing kodeOS apps on
-the [Kode Dot](https://kode.diy) - a pocket-sized, battery-powered ESP32-S3
-maker device (2.13" AMOLED, 9-axis IMU, mic, microSD, speaker, rear
-magnetic connector, optional Hacking Module).
+A Claude Code plugin for evidence-led development of kodeOS apps on the
+production [Kode Dot](https://kode.diy), targeting ESP32-P4/ESP32-C5.
+Personal-first, with public-ready engineering as the goal.
 
-## What's here
+## Current capabilities
 
-- `skills/kode-dot-dev/` - reference knowledge for the Kode Dot toolchain
-  (Arduino IDE, PlatformIO, pin map, driver components, kodeOS app
-  packaging) that Claude Code loads automatically when working on this
-  device.
-- `commands/new-kode-app.md` - `/new-kode-app <name>` scaffolds a new
-  PlatformIO project from `templates/app/`.
-- `templates/app/` - a minimal, verified-working PlatformIO project
-  (board definition, partition table, pin header, starter sketch) that
-  builds and flashes to a real Kode Dot.
+The plugin provides production research and compatibility guidance. It does not
+currently ship a verified production app template, loader integration or device deployment tool. An experimental
+[read-only MCP prototype](mcp/README.md) exists for simulated capability lookup;
+it is not auto-registered with the plugin. Production SDK, pin maps, application format and
+recovery evidence are tracked in [CK-R001](docs/research/ck-r001-production-contract-audit.md).
 
-## Status
+- `skills/kode-dot-dev/` guides source research and distinguishes build evidence
+  from production hardware validation.
+- `/claude-kode:new-kode-app` checks production scaffolding prerequisites. It
+  reports missing evidence rather than copying an incompatible S3 template.
+- `archive/esp32-s3/` preserves the unreleased prototype template and historical
+  notes. Its flash command has been removed; the recipe rejects device targets.
 
-Personal-use tool for now - built for my own Kode Dot projects, with the
-intent to open it up for public use once it's mature enough to support
-that well. See `CONTEXT.md` for the project glossary and `docs/adr/` for
-the design decisions behind it.
+**Do not apply archived S3 pins, partition offsets or binaries to a production
+P4/C5 Dot.** Historical PlatformIO setup is not production readiness evidence.
 
-Early scaffold. Verified against the `kodediy` GitHub org and
-`docs.kode.diy` on 2026-09-16:
+## Local plugin use
 
-- PlatformIO toolchain (board id, flash offsets, partition table, pin map)
-  is confirmed against real files in `kodediy/kodedot_examples`.
-- **kodeOS's actual app manifest/lifecycle is not publicly documented**
-  beyond an `app_name` build field - the launcher's "transform sketch into
-  app" flow is described only at a high level in the official docs.
-- One open question: the verified pin header defines a MAX17048-style fuel
-  gauge I2C address, but the `kodediy` org also has a `kode_BQ27220`
-  driver for a different fuel-gauge chip - unclear which is actually on
-  current hardware.
+With Claude Code installed, start a session with this checkout as a plugin:
 
-This repo deliberately does **not** vendor code from `kodediy/kodedot_examples`
-or `kodedot_SharedExamples` - those repos have no LICENSE file (all rights
-reserved by default). Templates here use only facts (pin numbers, board
-config) re-derived independently, plus the individual `kodediy` driver
-component repos, which are Apache-2.0.
-
-## Quickstart
-
-```
-pio run -d templates/app -t upload
+```sh
+claude --plugin-dir /absolute/path/to/claude-kode
 ```
 
-or use `/new-kode-app <name>` to scaffold a real project wherever you're
-working. `examples/` in this repo holds our own dogfooding apps, not
-user projects - see `CONTEXT.md` for the template/example/app distinction.
+Ask “check Kode Dot compatibility” or invoke `/claude-kode:new-kode-app MyApp`.
+No device is needed for research. Actual Claude Code activation and Windows
+compatibility still require interactive validation; see the
+[plugin development notes](docs/development/plugin-authoring.md).
 
-## License
+## Install development tools
 
-MIT - see `LICENSE`.
+With Python 3.10+ and Git installed, double-click `install.cmd` on Windows or
+`install.command` on macOS. On Linux, run `bash install.sh`. The shared installer
+sets up Node, locked dependencies and pinned firmware tools without contacting
+a device. Use `--host-only` to skip firmware setup.
+
+See [the environment setup guide](docs/SETUP.md) for prerequisites, platform
+launchers, activation, retries and current validation limits.
+
+## Development checks
+
+With Python 3.10 or newer:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+These checks cover the archive guard and installer integrity/error handling. They
+do not build firmware or establish a host/device permission boundary.
+
+For native firmware setup and emulator coverage, see the
+[firmware environment guide](docs/development/firmware-environment.md). ESP-IDF
+setup is partially installed; its Python dependencies remain network-blocked.
+
+## Decisions and next work
+
+[ADR-0004 and ADR-0009](docs/adr/README.md) accept versioned hardware profiles and
+kodeOS-first integration. Implementation and physical qualification remain open.
+See the [task list](docs/development/task-list.md) for dependencies and progress.
+The other proposed ADRs remain proposals. No v1 or production compatibility claim
+is made by this scaffold.
+
+## Licensing
+
+MIT — see [LICENSE](LICENSE). Preserve ADR-0001's restriction against vendoring
+unlicensed manufacturer examples. Verify component licences before reuse; public
+source access alone is not permission to copy code.
