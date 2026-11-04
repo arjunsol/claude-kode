@@ -163,7 +163,8 @@ constraints access check. No full firmware build passed.
 Windows/macOS execution has not been validated locally. The included
 [workflow](../.github/workflows/setup.yml) retains manual host checks for all three
 launchers with checkout and state paths containing spaces. Automatic push/PR
-triggers are disabled at the owner's request. Hosted validation remains unverified;
+triggers are removed and the hosted workflow is disabled at the owner's request.
+Re-enable it in GitHub Actions before requesting any manual run. Hosted validation remains unverified;
 previous jobs did not start because GitHub reported an account billing lock.
 This is host setup coverage, not Windows/macOS firmware or physical-device
 qualification. No full P4/C5 Kode Dot emulator is established; see the firmware
