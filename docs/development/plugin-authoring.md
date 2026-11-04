@@ -6,7 +6,7 @@ Read before writing skill portions:
 - [Plugin structure](https://github.com/anthropics/claude-plugins-official/blob/fa4eb54397ee2faccb6940512a19c017cb1337f3/plugins/plugin-dev/skills/plugin-structure/SKILL.md)
 - [Command development](https://github.com/anthropics/claude-plugins-official/blob/fa4eb54397ee2faccb6940512a19c017cb1337f3/plugins/plugin-dev/skills/command-development/SKILL.md)
 
-Reviewed on 2026-11-04 at the immutable revision above. No upstream plugin source
+Reviewed on 2026-11-04 at the immutable revision above. The [MCP integration skill](https://github.com/anthropics/claude-plugins-official/blob/fa4eb54397ee2faccb6940512a19c017cb1337f3/plugins/plugin-dev/skills/mcp-integration/SKILL.md) was also read before the feasibility slice. No upstream plugin source
 is vendored. Apply the conventional root `skills/` layout, specific third-person
 trigger descriptions, imperative instructions, progressive disclosure and
 `${CLAUDE_PLUGIN_ROOT}` paths. Keep existing command compatibility; prefer the

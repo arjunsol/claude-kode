@@ -61,3 +61,11 @@ Manufacturer source audit: clone https://github.com/kodediy/docs.git into a temp
 - Not run: production P4 sample build, Windows installation, production USB discovery, physical app installation, recovery and five-module qualification.
 - Blocked: selecting a production sample until its supported SDK and loading contract are established; physical observations until an identified production device and authorised procedure are available.
 - Next: revalidate current product/engineering sources once accessible, locate the supported P4/C5 SDK and app sample, and retain exact source/licence/toolchain identifiers before a build-only experiment.
+
+## Additional source discovery (2026-11-04)
+
+GitHub's public organisation listing at `https://github.com/orgs/kodediy/repositories?type=all` was accessible (HTTP 200). Visible repository links included arduino-esp32, bareiron, docs, the display/touch drivers, individual sensor drivers and kodedot_examples. This single listing is not an exhaustive inventory of every repository, branch or private SDK.
+
+`kodediy/bareiron` at `02733bee99289a9d2fe152d65bab82c7b3326767` was inspected in a temporary checkout. Its README describes a minimalist Minecraft server and generic ESP-IDF/PlatformIO compilation. Its licence file is GPLv3. The inspected README and targeted text search provided no production Kode loader contract; no source was copied. It is not a substitute for the missing production SDK.
+
+The product page remains blocked by proxy CONNECT 403. GitHub repository reads and pushes work, but both GraphQL and REST PR reads return Forbidden. Review branches can be pushed; API-based PR creation remains unavailable. No manufacturer outreach was sent.

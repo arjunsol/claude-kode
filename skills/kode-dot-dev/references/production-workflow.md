@@ -44,4 +44,5 @@ ADR-0004 and ADR-0009 are accepted architectural decisions. Their implementation
 and qualification remain outstanding. The old platform/core setup only supports
 historical S3 research and is not production readiness evidence. CK-R001 tracks
 the production evidence gap. Native ESP-IDF and TypeScript MCP are the agreed
-working direction, but their detailed ADRs and implementation are still pending.
+working direction, but their detailed ADRs remain proposed. A read-only simulated MCP prototype exists
+under `mcp/`; production services and hardware policy remain unimplemented.

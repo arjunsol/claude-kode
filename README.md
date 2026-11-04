@@ -7,8 +7,9 @@ Personal-first, with public-ready engineering as the goal.
 ## Current capabilities
 
 The plugin provides production research and compatibility guidance. It does not
-currently ship a verified production app template, loader integration, MCP server
-or device deployment tool. Production SDK, pin maps, application format and
+currently ship a verified production app template, loader integration or device deployment tool. An experimental
+[read-only MCP prototype](mcp/README.md) exists for simulated capability lookup;
+it is not auto-registered with the plugin. Production SDK, pin maps, application format and
 recovery evidence are tracked in [CK-R001](docs/research/ck-r001-production-contract-audit.md).
 
 - `skills/kode-dot-dev/` guides source research and distinguishes build evidence
