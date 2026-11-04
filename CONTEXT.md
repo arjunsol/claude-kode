@@ -1,26 +1,24 @@
 # claude-kode
 
-A Claude Code plugin, plus firmware tooling, for developing kodeOS apps on the Kode Dot (a pocket ESP32-S3 maker device). Personal-use tool for now, not a public-audience product.
+A Claude Code plugin, plus firmware tooling, for developing kodeOS apps on the production Kode Dot (ESP32-P4/ESP32-C5). Personal-use tool for now, not a public-audience product.
 
 ## Language
 
 **Kode Dot**:
-The physical device: a pocket-sized, battery-powered ESP32-S3 board with an AMOLED display, IMU, mic, microSD, speaker, and a 2×10 GPIO expansion header. Runs kodeOS.
+The production ESP32-P4/ESP32-C5 device selected by ADR-0004. Board/module revisions and production pin maps require scoped evidence. The old ESP32-S3 configuration is an unreleased prototype, archived under `archive/esp32-s3/`.
 
 **kodeOS**:
-The on-device launcher/OS that turns a flashed firmware binary into a named, categorized entry a user can pick from a menu on the device itself.
-_Avoid_: firmware (too generic - kodeOS is specifically the launcher layer, not any given app's firmware).
+The device's application runtime/launcher. Production loader format, ABI, packaging and recovery are under investigation in CK-R001. ADR-0009 selects a kodeOS-first workflow; acceptance does not verify that interface.
+_Avoid_: treating generic firmware and an installable kodeOS app as interchangeable.
 
 **App**:
-A firmware binary flashed to a Kode Dot, named and filed into a category by the user on-device after flashing (see Category below). The `app_name` build field sets the flashed binary's filename via `rename_bin.py`; it is not a manifest and does not set the app's on-device name or category by itself.
-_Avoid_: project, sketch (both used loosely elsewhere in the ecosystem; here "app" means specifically the kodeOS-launcher-visible unit). Also avoid implying a manifest exists - see Category.
+An application accepted by a verified, compatible kodeOS loader. A generic build artefact is not an installable app until an evidenced packaging/validation contract establishes that. Historical S3 `app_name` only sets a binary filename.
 
 **Category**:
-The folder on the microSD card an app's files live in (default categories: General, Hacking, GPIO, USB, Games; user-creatable). This *is* kodeOS's entire categorization mechanism - assigned by the user on-device after flashing, sharing an app means copying files between category folders by hand. Confirmed (2026-09-17): kodeOS's launcher is closed-source (see ADR-0002) and there is no manifest file, icon mechanism, or lifecycle hook of any kind in the documented flow.
-_Avoid_: manifest, metadata file, app descriptor (none of these exist for kodeOS).
+A category folder described in historical S3-era docs. Whether the production loader uses that same organisation remains unverified. ADR-0002's findings remain historical and are not silently superseded or extended to P4.
 
 **Template**:
-A copyable starting project under `templates/` in this repo. `/new-kode-app` scaffolds a new app from a template into wherever the user is working - not necessarily inside claude-kode itself.
+A copyable starting project with a verified target. No production template is currently shipped; `archive/esp32-s3/app` is historical build-only material. `/new-kode-app` scaffolds a new app from a template into wherever the user is working - not necessarily inside claude-kode itself.
 _Avoid_: example (see below - a template is what you copy *from*, an example is what results when *we* copy it for our own dogfooding).
 
 **Example**:
