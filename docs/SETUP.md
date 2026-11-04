@@ -161,8 +161,10 @@ Firmware-only setup reuses the installed SDK/tools and fails at the diagnosed
 constraints access check. No full firmware build passed.
 
 Windows/macOS execution has not been validated locally. The included
-[CI workflow](../.github/workflows/setup.yml) runs all three host launchers with a
-checkout and state path containing spaces; its remote results are still pending.
+[workflow](../.github/workflows/setup.yml) retains manual host checks for all three
+launchers with checkout and state paths containing spaces. Automatic push/PR
+triggers are disabled at the owner's request. Hosted validation remains unverified;
+previous jobs did not start because GitHub reported an account billing lock.
 This is host setup coverage, not Windows/macOS firmware or physical-device
 qualification. No full P4/C5 Kode Dot emulator is established; see the firmware
 guide for QEMU limits and the distinction between mocks and physical tests.
