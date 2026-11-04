@@ -2,9 +2,9 @@
 
 **Prepared:** 3 November 2026  
 **Repository:** https://github.com/arjunsol/claude-kode  
-**Status:** **Proposal and analysis only** — new ADR drafts are proposed, not adopted  
+**Status:** Original proposal and analysis, updated 4 November 2026: ADR-0004 and ADR-0009 accepted by the product owner; other new ADRs remain proposed. Implementation and qualification are outstanding.
 **Companion:** `docs/discovery/working-decisions.md`, with the full Q01–Q12 user-approved *working* decisions.  
-**Repository sync:** Submitted as draft documentation for repository review. No proposed ADR is accepted by this submission.
+**Repository sync:** Submitted as draft documentation for repository review. The original submission did not accept ADRs; the subsequent product-owner approval accepts ADR-0004 and ADR-0009 only.
 
 ## Executive assessment
 

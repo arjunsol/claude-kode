@@ -363,8 +363,8 @@ Detailed v1 acceptance metrics and flagship app, physical fixtures, availability
 
 ## Register integrity and repository synchronisation
 
-- All **12 working decisions have now been recorded**. None of the proposals in the accompanying architectural review has been ratified as a new ADR.
+- All **12 working decisions have now been recorded**. ADR-0004 and ADR-0009 were ratified by the product owner on 4 November 2026; other ADR proposals remain unratified. Implementation and hardware evidence remain outstanding.
 - The intended canonical path remains `docs/discovery/working-decisions.md` in https://github.com/arjunsol/claude-kode.
-- During discovery on 3 November 2026, GitHub writes were temporarily unavailable (HTTP 403). Repository write access was subsequently restored; this register is submitted for review on a documentation branch. Its inclusion does **not** ratify any proposed ADR.
+- During discovery on 3 November 2026, GitHub writes were temporarily unavailable (HTTP 403). Repository write access was subsequently restored; this register is submitted for review on a documentation branch. Its original inclusion did not ratify any proposed ADR; the subsequent 4 November 2026 approval applies to ADR-0004 and ADR-0009 only.
 - The existing accepted ADR-0001, ADR-0002 and ADR-0003 remain unchanged. ADR-0002's S3-era findings require production-P4 review before being used as an authoritative statement about P4 kodeOS.
 - Companion review: `docs/discovery/architecture-review.md` (also exported locally).
