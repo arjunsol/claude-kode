@@ -59,7 +59,7 @@ Manufacturer source audit: clone https://github.com/kodediy/docs.git into a temp
 
 - Completed: merged proposal inspection, manufacturer docs source audit, dated contract matrix, legacy S3 quarantine, skill/command corrections.
 - Not run: production P4 sample build, Windows installation, production USB discovery, physical app installation, recovery and five-module qualification.
-- Blocked: selecting a production sample until its supported SDK and loading contract are established; physical observations until an identified production device and authorised procedure are available.
+- Remaining: choose and reproduce the source-identified P4 build candidate; native IDF packaging and deployment compatibility remain unverified; physical observations until an identified production device and authorised procedure are available.
 - Next: revalidate current product/engineering sources once accessible, locate the supported P4/C5 SDK and app sample, and retain exact source/licence/toolchain identifiers before a build-only experiment.
 
 ## Additional source discovery (2026-11-04)
@@ -81,3 +81,9 @@ The user pointed to `https://github.com/kodediy/kodedot_examples`. Inspection of
 - The subdirectory has its own `Doom/LICENSE`, a GPLv2 text; the README and port source state GPL-2.0-or-later. `components/doomgeneric/VENDORED.md` records upstream and patch provenance. ADR-0001's root/no-licence concern must not erase this explicitly licensed subdirectory; it also does not permit copying GPL code into an MIT-only template without satisfying its licence. No manufacturer code has been vendored here.
 
 Updated conclusion: a documented P4/C5 source example and build configuration **have been found**. A standalone production SDK release and a supported kodeOS app-loader API **have not been established**. Next build-only step is to verify the required game asset and set up the sample's pinned ESP-IDF 6.0.1 toolchain, then reproduce without flashing. Production identity, electrical qualification, supported kodeOS packaging and recovery remain open.
+
+## Wider organisation audit: production integration source found
+
+See [the manufacturer inventory](manufacturer-repositories.md) for all 12 publicly listed repositories, exact component SHAs and the two Arduino fork heads. The fork at `deb631e451b7891e0559cad5a3d14df86b51d67e` contains a P4 Kode Dot board, app descriptor, app-only upload recipe and DATA-partition compatibility wrappers. The feature tip `60fc0c0d4651271975ff26825833a11f2f27fae5` changes the mailbox layout. This supersedes earlier broad “no loader implementation found” uncertainty: a concrete manufacturer-side integration **has now been source-inspected**. It does not establish firmware-version compatibility, native ESP-IDF packaging or successful real-device installation/recovery.
+
+The app descriptor identifies apps using `esp_app_desc_t::project_name`; the historical binary-filename-only assumption must not be carried into P4 work. The DVT pin header, archived driver inventory and Doom SD-power claims also conflict in ways requiring revision-specific reconciliation. No single supported production hardware profile has been verified. Archived Apache-2.0 components are reusable candidates subject to compatibility checks, not proof they are fitted to the current device.

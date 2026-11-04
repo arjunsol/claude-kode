@@ -46,3 +46,12 @@ historical S3 research and is not production readiness evidence. CK-R001 tracks
 the production evidence gap. Native ESP-IDF and TypeScript MCP are the agreed
 working direction, but their detailed ADRs remain proposed. A read-only simulated MCP prototype exists
 under `mcp/`; production services and hardware policy remain unimplemented.
+
+## Newly located manufacturer integration
+
+Consult `${CLAUDE_PLUGIN_ROOT}/docs/research/manufacturer-repositories.md` for the
+Arduino P4 board/descriptor/mailbox implementation and archived components.
+Source inspection establishes an integration candidate, not a verified deployment
+route. Keep mailbox layout and pin/sensor claims revision-specific; master and the
+6 MB feature branch differ. Preserve the distinction between that Arduino path
+and native ESP-IDF packaging.
