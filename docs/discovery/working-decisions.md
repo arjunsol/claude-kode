@@ -1,5 +1,7 @@
 # Claude Kode — Working Product Decisions
 
+> **Source correction — 11 November 2026:** All Q01–Q12 owner choices remain unchanged. The prior claims that production kodeOS was closed-source or had no manifest are superseded as **facts**, not as accepted ADRs, by [the published official v0.1.0 source audit](../research/2026-11-11-official-kodeos-sdk-source-audit.md). Proposed ADR-0017 requires explicit review before replacing accepted ADR-0002's historical guidance.
+
 **Project:** https://github.com/arjunsol/claude-kode  
 **Prepared:** 3 November 2026  
 **Status:** Discovery register; not an approved ADR  
