@@ -1,5 +1,7 @@
 # Claude Kode — Architecture reconciliation, proposed ADR register and implementation roadmap
 
+> **Evidence update — 11 November 2026:** Kode has now published v0.1.0 source for kodeOS, kode-sdk, C5 firmware and the app template, including a real manifest and loader. Source-level blockers described in the 3 November assessment have changed. See [the new source audit](../research/2026-11-11-official-kodeos-sdk-source-audit.md) and proposed ADR-0017. This does not establish hardware verification or alter the user's twelve decisions.
+
 **Prepared:** 3 November 2026  
 **Repository:** https://github.com/arjunsol/claude-kode  
 **Status:** **Proposal and analysis only** — new ADR drafts are proposed, not adopted  
