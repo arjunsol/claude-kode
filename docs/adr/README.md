@@ -2,6 +2,8 @@
 
 > **Governance:** ADR-0001…ADR-0003 in the existing repository are accepted and **not modified** by this proposal pack. ADR-0004…ADR-0016 in this pack are all **proposed**. The product owner's Q01–Q12 answers are agreed **working decisions**; an ADR is not adopted until explicitly reviewed and its status is changed by an approved repository change.
 
+**New source evidence (11 Nov 2026):** [Official kodeOS/SDK v0.1.0 audit](../research/2026-11-11-official-kodeos-sdk-source-audit.md). Public kodeOS and SDK source, a real manifest and documented app boot/install lifecycle now exist. ADR-0002's production guidance is obsolete, but remains accepted as historical until ADR-0017 is explicitly approved.
+
 **Canonical inputs:** [working decisions](../discovery/working-decisions.md) · [adversarial reconciliation and roadmap](../discovery/architecture-review.md).
 
 | ADR | Proposed topic | Source decision(s) | State |
@@ -19,6 +21,7 @@
 | [0014](0014-independent-electrical-motor-and-power-safety-limits.md) | Independent electrical, motor and power safety limits | Q04, Q09; Maker and Robotics | Proposed |
 | [0015](0015-lawful-rf-research-and-constrained-mesh-f-ck-operating-modes.md) | Lawful RF research and constrained Mesh/F*CK operating modes | Q04, Q09, Q10; Mesh and F*CK | Proposed |
 | [0016](0016-platform-neutral-core-with-windows-first-transport-implementation.md) | Platform-neutral core with Windows-first transport implementation | Q02, Q05 | Proposed |
+| [0017](0017-published-kodeos-production-app-contract-and-supersession-of-0002.md) | Public production kodeOS app/manifest contract; proposes supersession of ADR-0002 | Q03, Q06, Q07, Q10, Q12 | Proposed |
 
 ## Review order
 
