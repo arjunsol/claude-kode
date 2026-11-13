@@ -28,7 +28,7 @@ serial-console protocol. **Source availability is not hardware verification.**
   operator enables them, run only on projects whose build logic is the pinned
   template's, and are not sandboxed. No installation, flashing, arbitrary CLI commands,
   radio transmit or motor control is available through MCP. One build has been run
-  against a real ESP-IDF v6.1 (on an earlier commit of this branch); nothing has
+  against a real ESP-IDF v6.1 (on the final code, commit b2fe984, and on an earlier commit); nothing has
   run on a device. See the
   [design and evidence record](docs/development/f1-capability-evidence-build.md).
 - `.mcp.json` registers the local server for Claude Code **after** you have run

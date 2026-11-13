@@ -25,8 +25,8 @@ v0.1.0 checkout and is skipped unless you set `KODE_TEST_TEMPLATE_DIR` to that c
 (an absolute path); with the variable set, the test that checks the refusal without a
 template is skipped instead. One test inspects a real build directory and is skipped unless
 you set `KODE_TEST_REAL_BUILD_DIR` to the `build/` directory of a project (named `rb_app`)
-that a real ESP-IDF v6.1 build produced. A run of an earlier state of this code with both
-variables set gave 407 pass and 1 skipped out of 408; it was not repeated on the final code.
+that a real ESP-IDF v6.1 build produced. A run on commit b2fe984 with both variables set,
+against the real build of that commit, gave 421 pass, 0 fail and 1 skipped out of 422.
 
 The plugin root `.mcp.json` declares the built `mcp/dist/server.js` using
 `${CLAUDE_PLUGIN_ROOT}`. Run the build before enabling the plugin, start Claude Code with
@@ -328,12 +328,14 @@ and that is not recorded in the registry.
 
 What remains unverified:
 
-- A real `idf.py build` of the code in this branch as it now stands. An attempt on the
-  final code was BLOCKED (cut short, no failure found). One real build passed
-  on commit 46271fa (through `kode_build`, ESP-IDF v6.1.0 at `fff9895c`, template v0.1.0
-  built against SDK v0.1.1, 321 s, image 517680 bytes) and is described in the design
-  record. The fixes after that commit have been checked against that build directory by
-  one test; they have not been used to run a new build.
+- A real build on any host other than the one used. Two real builds passed through
+  `kode_build` (ESP-IDF v6.1.0 at `fff9895c`, template v0.1.0 built against SDK v0.1.1, on
+  Windows 11): commit 46271fa (321 s, image 517680 bytes) and commit b2fe984, the final code
+  (413.6 s, image 517680 bytes, SHA-256
+  `5215c21393a9e45b355d3c15d492870ebbbbc6ea3be82fe9f5b0d2b56c6d3cef`, 13 of 13 inspection
+  checks). An earlier attempt on the final code was BLOCKED (cut short) and was superseded.
+  A grammar-breaking `sdkconfig.defaults` was refused before any build ran. Both are
+  described in the design record. Nothing was flashed or run on a device.
 - Running a preset-file attack through a real `idf.py`: the refusal is tested, and the
   reading of idf.py comes from its v6.1 source.
 - Kconfig meaning behind accepted lines. Two gates found no disagreement with kconfgen on the

@@ -263,10 +263,10 @@ the host; do not substitute a hand-built scaffold.
 
 Evidence is graded L1 build verified, L2 simulation verified, L3 device
 verified on a production Dot, and L4 integration verified with real expansion
-modules. A build through `kode_build` is at most L1. One real build has passed
-(commit 46271fa, ESP-IDF v6.1.0, v0.1.0 template against SDK v0.1.1); it is
-described in the design record and is not a registry record (a build of the later code was
-attempted and is BLOCKED, so that code has not been built for real), because the record
+modules. A build through `kode_build` is at most L1. Two real builds have passed
+(commits 46271fa and b2fe984, ESP-IDF v6.1.0, v0.1.0 template against SDK v0.1.1); they are
+described in the design record and are not registry records (an attempt between them was
+BLOCKED and was superseded), because the record
 shape cannot describe a host build. No L1, L2, L3 or L4 record exists, so no claim in the registry is
 `device_verified` or `integration_verified`. Report outcomes as PASS, FAIL, BLOCKED or NOT TESTED,
 with the evidence behind each: a command that was not run is NOT TESTED, not

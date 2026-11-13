@@ -1,8 +1,9 @@
 # F1: capability registry, evidence and build-only pipeline
 
 **Status:** Implemented in a proposed PR (stacked on PR #4); tested on a Windows host with
-no device; one real ESP-IDF v6.1 build passed on commit 46271fa; a build of the later code was
-attempted and is BLOCKED (cut short, no failure found), so that code has not been built for real; **NOT TESTED** on a physical Dot. Date: 13 November 2026.
+no device; real ESP-IDF v6.1 builds passed on commit 46271fa and on commit b2fe984 (the code
+at the head of this branch; its source and tests are those of 84b2911); an attempt in between
+was BLOCKED (cut short, no failure found); **NOT TESTED** on a physical Dot. Date: 13 November 2026.
 Tracking issue: [CK-R003](https://github.com/arjunsol/claude-kode/issues/7). The
 specification it implements in part is the PR #6 proposal.
 
@@ -408,10 +409,10 @@ below and by one optional test.
 | `npm run build` | PASS, clean |
 | `npm test`, no template checkout | PASS: 422 tests, 419 pass, 0 fail, 3 skipped (the real-template test and the real-build-directory test are two; the third was not identified in this record) |
 | `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 422 tests, 420 pass, 0 fail, 2 skipped; a real scaffold is created, pinned to SDK v0.1.1, passes validation (including the new `sdkconfig.defaults` grammar), is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
-| `npm test` with the template and `KODE_TEST_REAL_BUILD_DIR` both set | PASS on the code of the fix-g2 package, before the last narrowing fix: 408 tests, 407 pass, 0 fail, 1 skipped; the real resolved `sdkconfig.json` of the earlier real build passes the two new inspection checks. NOT TESTED on the final code with both variables set |
+| `npm test` with the template and `KODE_TEST_REAL_BUILD_DIR` both set | PASS on commit b2fe984 against the real build directory of that commit: 422 tests, 421 pass, 0 fail, 1 skipped; the test "a real build directory (KODE_TEST_REAL_BUILD_DIR) inspects as install-compatible with every check passing" passed. An earlier run on the code of the fix-g2 package, before the last narrowing fix, gave 408 tests, 407 pass, 0 fail, 1 skipped |
 | Python setup tests (`python -m unittest discover -s tests -v`) | PASS: 13 tests, OK |
 | Real `kode_build` of a scaffolded app on ESP-IDF v6.1.0 | PASS, once, on commit 46271fa; see "Real ESP-IDF build" below |
-| Real `kode_build` of the code in this commit | BLOCKED: the attempt was cut short, see "Real build of the final code" below |
+| Real `kode_build` of the final code (commit b2fe984) | PASS: 413.6 s, 13 of 13 inspection checks; see "Real build of the final code" below. An earlier attempt on c823f00 plus uncommitted changes was BLOCKED (cut short) |
 
 Node was v24.22.1 for every run above. The tests added since commit 46271fa are in six new
 files: `wf1-gate.test.ts`, `wf1-build-report.test.ts` and `wf1-registry.test.ts` (round one),
@@ -497,8 +498,9 @@ fixes in this round, through the MCP tools in order, with no device attached.
   kodeOS-install compatible true, device verified false (NOT TESTED), stage
   `kodeos_install_compatible`, chip esp32p4, flash plan `mailbox_only` at `0x1a00000` for
   `rb_app.bin`, 9 of 9 checks pass. After the fixes the inspection has 13 checks (the resolved configuration is read for the app role, hold-BOT, watchdog, partition table and radio); the
-  optional test `KODE_TEST_REAL_BUILD_DIR` runs the current code over this build directory
-  and it is install-compatible with every check passing.
+  optional test `KODE_TEST_REAL_BUILD_DIR` ran the code of that time over this build
+  directory and it was install-compatible with every check passing. The final code has since
+  been built for real (see "Real build of the final code").
 - A second `kode_build` without cleaning was refused with `BUILD_STATE_PRESENT`, as
   designed. The server's stderr was empty. The scaffold's long path (about 150 characters)
   did not break the build.
@@ -514,9 +516,14 @@ fixes in this round, through the MCP tools in order, with no device attached.
   from PowerShell.
 - Combinations still NOT TESTED: the v0.1.0 template pinned to SDK v0.1.0; building the same
   project twice to learn what differs between images; a direct `idf.py build` (not needed,
-  as the MCP build passed); a build of the fixed code (attempted, see below).
+  as the MCP build passed). A build of the fixed code was attempted, then done; see below.
 
 ### Real build of the final code
+
+Two attempts, in order. The first was BLOCKED and gave no result. The second, on the
+committed code, is a PASS and supersedes it. History is kept as it happened.
+
+#### Attempt 1: BLOCKED
 
 Result: **BLOCKED**. No image was built and no inspection was run.
 
@@ -530,16 +537,75 @@ Result: **BLOCKED**. No image was built and no inspection was run.
   and reason code OK (0.171 s, 0.035 s, 0.02 s). `kode_build` was started and had not
   finished when the attempt was stopped. It was stopped because the agent was told to give its
   final answer while the five-to-eight-minute compile was still running. No failure was found.
-- NOT TESTED: `kode_inspect_image` on the new build (so the 13 inspection checks have not run
-  on a fresh real image), the second-build refusal on the new code, the negative check
-  (`neg.mjs`, written and never run), the real-build-directory test against a new build, and
-  whether the worktree was left clean by that attempt.
-- To repeat: `pwsh -File <scratchpad>/wf2/rebuild/run.ps1 main`, then `run.ps1 neg`, with
-  `KODE_TEST_REAL_BUILD_DIR=<scratchpad>/wf2/rebuild/ws/rb_app/build`.
-- The only real build that passed remains the one on 46271fa above. After it, the
-  `sdkconfig.defaults` grammar, the B3 and B7 narrowing and two inspection checks were added.
-  The real resolved `sdkconfig.json` of that earlier build passes the two new inspection
-  checks (a test), which is not a new build.
+- This attempt produced no inspection, no second-build refusal, no negative check and no
+  real-build-directory test. Attempt 2 below did all four.
+- Between the first real build (46271fa) and attempt 2, the `sdkconfig.defaults` grammar, the
+  B3 and B7 narrowing and two inspection checks were added.
+
+#### Attempt 2: real build of commit b2fe984 (PASS)
+
+Result: **PASS**. Run on 13 November 2026 by the orchestrating session, not by a workflow
+agent, on the committed and pushed code. No device attached; build only; nothing flashed.
+
+- Code: worktree `claude-kode-f1`, commit `b2fe984e3ce714e5cf6a0c023d5d8b30c21c2356`, clean
+  (`git status --short` empty before and after). The MCP server was rebuilt from that commit
+  with `npm run build` under Node 24.22.1. The source and test files in b2fe984 are those of
+  84b2911. b2fe984 changed documentation only, and the commit that records this result also
+  changes documentation only. The build therefore covers the code at the new head.
+- Method: the scripts the blocked agent left (`run.ps1`, `client.mjs`, `neg.mjs`, in the
+  session scratchpad), driven from PowerShell with the ESP-IDF environment activated. An
+  independent MCP client started the built server over stdio. Server stderr was empty.
+- Host and toolchain: Windows 11; ESP-IDF 6.1.0 at `C:/kt/esp-idf-v6.1`, commit
+  `fff9895c82d744c7237be8847347bdd1b07c6643` (equal to the pin); Python 3.13 environment from
+  the installer; template `kode-app-template` v0.1.0 (`9cfaa43b`); SDK release built v0.1.1.
+
+Main run (project `rb_app`):
+
+| Call | Result |
+| --- | --- |
+| 1 `kode_get_toolchain_status` | PASS: ok, reason code OK |
+| 2 `kode_new_app` | PASS: ok, reason code OK |
+| 3 `kode_validate` | PASS: ok, verdict pass, 1 warning |
+| 4 `kode_build` | PASS: ok, 413.6 s, stage `kodeos_install_compatible`, `reproduciblyPinned` true, `outputHeldOpen` false, no build-logic warnings, evidence level L1, result passed |
+| 5 `kode_inspect_image` | PASS: ok, `buildObserved` true |
+| 6 `kode_build` again, not cleaned | PASS as designed: refused with `BUILD_STATE_PRESENT` (build and sdkconfig exist), 0.007 s |
+
+- Image `build/rb_app.bin`: 517,680 bytes, SHA-256
+  `5215c21393a9e45b355d3c15d492870ebbbbc6ea3be82fe9f5b0d2b56c6d3cef`, computed independently
+  from the file and equal to the tool's value. Chip id 0x0012 (esp32p4), 8 segments.
+- Stages: source project true, compiled image true, kodeOS-install compatible true, device
+  verified false (`NOT TESTED`).
+- Inspection: 13 of 13 checks pass: `image.chip`, `image.app_descriptor`, `image.identity`,
+  `image.idf_version`, `app.manifest`, `app.boot_role`, `app.configured_target`,
+  `app.home_hold`, `app.ao_watchdog`, `app.partition_table`, `app.radio`,
+  `app.flash_plan`, `app.size`.
+- The two checks added in 84b2911 passed on real resolved configuration: `app.partition_table`
+  (`PARTITION_TABLE_CUSTOM` true; both filename keys are
+  `managed_components/kodediy__kbsp/partitions.csv`) and `app.radio` (`KODEOS_RADIO` false,
+  `ESP_HOSTED_ENABLED` false, `BT_ENABLED` false).
+- Flash plan: mailbox only, `rb_app.bin` at `0x1a00000`. It fits the mailbox (limit
+  6,287,360 bytes) and the catalogue (limit 8,388,608 bytes).
+- The image hash differs from the two earlier real builds (`c7c127fe...` and `291667a6...`,
+  on 46271fa). The app descriptor embeds the build time (21:57:33, Nov 13 2026). Whether that
+  is the only difference was not tested.
+
+Negative check on the real toolchain (project `neg_app`): `kode_new_app` returned ok; one line
+`CONFIG_KODEOS_RADIO=no` was appended to `sdkconfig.defaults`. `kode_validate` returned
+`not_verified` with `VALIDATION_FAILED`: `CK-DEFAULTS-GRAMMAR` fails and names line 34; B3,
+B4, B7, D8 and C2-WATCH fail closed; `buildLogic.eligible` is false. `kode_build` was refused
+with `VALIDATION_FAILED` in 0.014 s. Afterwards the project directory had no `build/`, no
+`sdkconfig` and no `managed_components/`, so no build process ran. Result: PASS.
+
+Suite against the new real build directory: `npm test` with `KODE_TEST_TEMPLATE_DIR` (real
+template) and `KODE_TEST_REAL_BUILD_DIR` set to that `rb_app/build`, Node 24.22.1, on b2fe984:
+422 tests, 421 pass, 0 fail, 1 skipped. The real-build-directory test passed. The runs without
+the variables are unchanged: no template, 422 tests, 419 pass, 0 fail, 3 skipped; template
+only, 422 tests, 420 pass, 0 fail, 2 skipped.
+
+NOT TESTED by this build: the CMake preset attack through a real `idf.py`; GCC; the POSIX kill
+path; the `CONFIG_APP_NO_BLOBS=y` case (NEW-2); anything on a physical Dot or module; Claude
+Code plugin discovery; macOS; Linux; GitHub Actions. No independent review has read the
+documentation text changed in b2fe984 or in the commit that records this result.
 
 ### Handover test requirements
 
@@ -806,8 +872,8 @@ member (the one exception, `PARTITION_TABLE_MD5`, is read by no check).
 State of the review items at the end of this work: closed F1, F2 and G1-1 (both under G2-1),
 F3, F4, F5 (documentation), F7 (documentation), G1-2, G1-3, G2-1, G2-2, N-1, N-2. Open:
 F6 part c (owner decision), NEW-1 and NEW-2 (both low, fail-safe). The last gate read the
-final code; this record was written after it. The real build did not run on that code
-(BLOCKED, above).
+final code; this record was written after it. The real build of that code later passed on
+commit b2fe984 (see "Real build of the final code"); an earlier attempt was BLOCKED.
 
 Deferred, with the reason:
 
@@ -837,7 +903,8 @@ Deferred, with the reason:
   fetches the SDK by tag, and a pre-existing `managed_components/` or `dependencies.lock`
   cannot be verified (`BL-UNVERIFIABLE`). The first defect was never reproduced through
   idf.py; the preset bypass (F1) was reproduced with cmake alone and its idf.py half read
-  from source. A real ESP-IDF is now installed on the development host, so this can be run.
+  from source. A real ESP-IDF is now installed on the development host, so this can be run;
+  it has not been run.
 - The gate is a list of the project inputs ESP-IDF v6.1 reads, and the first review of the
   second round found the list incomplete once. Other inputs may exist. Inputs driven by the
   operator's environment (`IDF_EXTRA_ACTIONS_PATH`, `SDKCONFIG_DEFAULTS`, `EXTRA_CFLAGS`,
@@ -855,7 +922,9 @@ Deferred, with the reason:
   accepted. The cost of not reading Kconfig defaults.
 - **Open (NEW-2, low, fail-safe):** `CONFIG_APP_NO_BLOBS=y` passes statically, then `app.radio`
   fails after the build because `BT_ENABLED` is absent from the resolved configuration. A
-  false refusal, not a bypass; inferred, not observed in a real build.
+  false refusal, not a bypass; inferred, not observed in a real build. In the real build of
+  b2fe984, `BT_ENABLED` was present and false in the resolved configuration for the stock
+  template; the `CONFIG_APP_NO_BLOBS=y` case itself was not built.
 - Kconfig meaning can still change a protected value through accepted lines that no static
   rule names. Only the five resolved-configuration checks catch that, after the build has
   run.
@@ -870,8 +939,9 @@ Deferred, with the reason:
   inspection. The server never flashes.
 - Two `kode_build` calls on one project at once, and the POSIX process-group kill path,
   were not tested.
-- One real build passed (commit 46271fa). The attempt to build the code after it was BLOCKED
-  (cut short, no failure found); that code has not been built for real.
+- Two real builds passed: commit 46271fa and commit b2fe984 (the final code). The attempt
+  between them was BLOCKED (cut short, no failure found). Both builds are of one project on one
+  host (Windows 11), with no device.
 - Build receipts last only for the server process. After a restart every image is
   unattested until it is rebuilt.
 - A process that detaches itself outlives a timed-out build. The deadline ends the build
@@ -888,7 +958,8 @@ Deferred, with the reason:
 
 ## Manual validation checklist
 
-Items marked done were done by the workflow on the development host, on commit 46271fa (except the G2-1 item, which is a code and gate item), and
+Items marked done were done on the development host, on commit 46271fa or commit b2fe984 as
+each item says (except the G2-1 item, which is a code and gate item), and
 are not a person's validation on a device. Everything else has not been done and needs a
 person with the stated hardware or host.
 
@@ -897,14 +968,16 @@ person with the stated hardware or host.
       installer from PowerShell with a short `KODE_TOOLCHAIN_ROOT` such as `C:/kt`.
 - [x] Set the host variables; run `kode_new_app`, `kode_validate`, `kode_build` and
       `kode_inspect_image` on a real project: done once, image digest
-      `c7c127fe...9e3c5b` (full value above). Repeat on the final commit: not done.
+      `c7c127fe...9e3c5b` (full value above). Repeated on commit b2fe984: done, image digest
+      `5215c213...6d3cef` (full value above).
 - [ ] Build a scaffolded project against kode-sdk v0.1.0 (the v0.1.0 template against SDK
       v0.1.1 is done, once).
 - [x] Confirm the generated `flasher_args.json` is the single mailbox entry on a real build:
       the inspection reported `mailbox_only` at `0x1a00000` for `rb_app.bin`.
-- [ ] Rebuild the unmodified template on the final code and check 13 of 13 inspection checks.
-      Attempted once and BLOCKED (cut short); the optional test covers the older build
-      directory only. Then run `run.ps1 neg` and the second-build refusal.
+- [x] Rebuild the unmodified template on the final code and check 13 of 13 inspection checks:
+      done on commit b2fe984 (an earlier attempt was BLOCKED, cut short). The negative check
+      and the second-build refusal were run and passed, and the optional test passed against
+      the new build directory.
 - [ ] Run the CMake preset attack through a real `idf.py` with a harmless marker file, to
       move F1 from "read in source" to "executed". Build only, no device.
 - [x] G2-1: done (the grammar refusal and the resolved-configuration checks) and checked by
