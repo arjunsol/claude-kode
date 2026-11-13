@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, symlink } from 'node:fs/promises';
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -143,9 +143,13 @@ test('malformed tool arguments are rejected at the schema boundary', async () =>
 });
 
 test('capabilities are served with provenance for assessed releases only', async () => {
+  // The full list includes the two contradicting flash-offset claims, so the
+  // answer as a whole is served but flagged; a single clean capability is ok.
   const { isError, result } = await call('kode_get_capabilities', { profileId });
   assert.equal(isError, false);
-  assert.equal(result.status, 'ok');
+  assert.equal(result.status, 'not_verified');
+  assert.equal(result.reasonCode, 'EVIDENCE_CONFLICTING');
+  assert.equal((await call('kode_get_capabilities', { profileId, capability: 'main_chip' })).result.status, 'ok');
   assert.equal(result.effectClass, 'S0');
   assert.equal(result.verifiedLayer, 'documentation');
   assert.equal(result.payload.deviceVerified, false);
@@ -178,13 +182,15 @@ test('capabilities are served with provenance for assessed releases only', async
 
 test('unknown boards, wrong revisions, unassessed SDK releases and the S3 prototype get no facts', async () => {
   const cases: Array<[Record<string, unknown>, string, string, boolean]> = [
-    [{ profileId: 'kode-dot-pro' }, 'not_verified', 'PROFILE_UNKNOWN', false],
-    [{ profileId: 'simulated-p4-c5' }, 'not_verified', 'PROFILE_UNKNOWN', false],
+    // Every one is a refusal and an MCP tool error: a client that reads only the
+    // error flag or the text must not take any of these for an answer.
+    [{ profileId: 'kode-dot-pro' }, 'refused', 'PROFILE_UNKNOWN', true],
+    [{ profileId: 'simulated-p4-c5' }, 'refused', 'PROFILE_UNKNOWN', true],
     [{ profileId: 'kode-dot-s3-prototype' }, 'refused', 'PROFILE_ARCHIVED_PROTOTYPE', true],
-    [{ profileId, boardRevision: 'EVT' }, 'not_verified', 'BOARD_REVISION_NOT_IN_PROFILE', false],
-    [{ profileId, boardRevision: 'PVT-2' }, 'not_verified', 'BOARD_REVISION_NOT_IN_PROFILE', false],
-    [{ profileId, sdkRelease: 'v0.1.2' }, 'not_verified', 'SDK_RELEASE_NOT_ASSESSED', false],
-    [{ profileId, sdkRelease: 'v1.0.0' }, 'not_verified', 'SDK_RELEASE_NOT_ASSESSED', false],
+    [{ profileId, boardRevision: 'EVT' }, 'refused', 'BOARD_REVISION_NOT_IN_PROFILE', true],
+    [{ profileId, boardRevision: 'PVT-2' }, 'refused', 'BOARD_REVISION_NOT_IN_PROFILE', true],
+    [{ profileId, sdkRelease: 'v0.1.2' }, 'refused', 'SDK_RELEASE_NOT_ASSESSED', true],
+    [{ profileId, sdkRelease: 'v1.0.0' }, 'refused', 'SDK_RELEASE_NOT_ASSESSED', true],
   ];
   for (const tool of ['kode_get_capabilities', 'kode_get_pinout', 'kode_get_evidence']) {
     for (const [args, status, reasonCode, isError] of cases) {
@@ -294,15 +300,26 @@ test('compatibility checks refuse device operations for stated reasons and never
     [{ operation: 'camera_capture', moduleId: 'lidar' }, ['MODULE_UNKNOWN']],
     [{ operation: 'maker_gpio_control' }, ['MODULE_REQUIRED']],
   ];
+  assert.equal(build.result.status, 'ok');
+  assert.equal(build.isError, false);
+  assert.deepEqual(build.result.payload.cautions, []);
   for (const [args, codes] of expectations) {
-    const { result } = await call('kode_check_compatibility', { profileId, ...args });
+    const { isError, result } = await call('kode_check_compatibility', { profileId, ...args });
     assert.equal(result.payload.decision, 'refused', JSON.stringify(args));
     for (const code of codes) assert.ok(result.payload.reasonCodes.includes(code), `${JSON.stringify(args)} lacks ${code}`);
     assert.equal(result.payload.grantsAuthorisation, false);
     assert.match(result.message, /^Decision: REFUSED/);
+    // A refused decision is a refusal at every level, not an "ok" with a payload to read.
+    assert.equal(result.status, 'refused', JSON.stringify(args));
+    assert.equal(result.reasonCode, result.payload.reasonCodes[0]);
+    assert.equal(isError, true);
   }
   const s3 = await call('kode_check_compatibility', { profileId: 'kode-dot-s3-prototype', operation: 'build_app' });
   assert.ok(s3.result.payload.reasonCodes.includes('PROFILE_ARCHIVED_PROTOTYPE'));
+  // A console read carries its cautions even when it is refused for lack of opt-in.
+  const serial = await call('kode_check_compatibility', { profileId, operation: 'console_read' });
+  assert.equal(serial.result.payload.cautions.length, 2);
+  assert.match(serial.result.payload.cautions[0], /resets the Dot/);
 });
 
 test('the SDK contract reports v0.1.1, the unchanged partition table and the standing offset conflict', async () => {
@@ -315,13 +332,25 @@ test('the SDK contract reports v0.1.1, the unchanged partition table and the sta
   assert.equal(result.payload.installation.conflict.templateReadmeOffset, '0x1C00000');
   assert.match(result.payload.installation.status, /NOT IMPLEMENTED/);
   assert.ok(result.payload.changesInV011.length >= 5);
-  assert.equal(result.payload.console.integrity.kcli.sha256, 'a8c65236b51a904ee879c4ee1776612065417fae45eb4d15dc367c0cb737bcca');
+  // Console tool digests are keyed by kodeOS release: what runs on a Dot is
+  // independent of the SDK release an app pins.
+  const digests = { 'v0.1.1': 'a8c65236b51a904ee879c4ee1776612065417fae45eb4d15dc367c0cb737bcca', 'v0.1.0': '8df04628aa2b2acf09bc60d42814a573e7545cdf99f07ad0318ca723d39ca750' };
+  for (const [release, digest] of Object.entries(digests)) {
+    assert.equal(result.payload.console.integrityByKodeosRelease[release].kcli.sha256, digest);
+  }
   assert.equal(result.payload.examples.length, 17);
+  assert.ok(result.payload.hazards.some((hazard: string) => /installs it there/.test(hazard)));
   const previous = await call('kode_get_sdk_contract', { profileId, sdkRelease: 'v0.1.0' });
   assert.equal(previous.result.payload.release, 'v0.1.0');
   assert.deepEqual(previous.result.payload.changesInV011, []);
-  assert.equal(previous.result.payload.console.integrity.kcli.sha256, '8df04628aa2b2acf09bc60d42814a573e7545cdf99f07ad0318ca723d39ca750');
-  assert.equal((await call('kode_get_sdk_contract', { profileId, sdkRelease: 'v0.1.2' })).result.reasonCode, 'SDK_RELEASE_NOT_ASSESSED');
+  for (const [release, digest] of Object.entries(digests)) {
+    assert.equal(previous.result.payload.console.integrityByKodeosRelease[release].kcli.sha256, digest);
+  }
+  // A fact recorded only for v0.1.1 is not served as a v0.1.0 hazard.
+  assert.equal(previous.result.payload.hazards.some((hazard: string) => /installs it there/.test(hazard)), false);
+  const unassessed = await call('kode_get_sdk_contract', { profileId, sdkRelease: 'v0.1.2' });
+  assert.equal(unassessed.result.reasonCode, 'SDK_RELEASE_NOT_ASSESSED');
+  assert.equal(unassessed.result.status, 'refused');
 });
 
 test('toolchain status reports the host as not ready without starting anything', async () => {
@@ -373,6 +402,10 @@ test('validation and image inspection keep source, compiled, install-compatible 
   assert.equal(validated.result.status, 'ok');
   assert.equal(validated.result.payload.stage, 'source_project');
   assert.equal(validated.result.verifiedLayer, 'source');
+  // Passing the static checks is not permission to execute the project's build
+  // scripts: this hand-made project's build logic is not the pinned template's.
+  assert.equal(validated.result.payload.buildLogic.eligible, false);
+  assert.match(validated.result.message, /kode_build will refuse it/);
 
   // A source project is not an image.
   const unbuilt = await call('kode_inspect_image', { projectName: 'stage_app' });
@@ -383,24 +416,31 @@ test('validation and image inspection keep source, compiled, install-compatible 
   // A compiled image without the app contract is not install-compatible.
   const bare = fakeImage({ project: 'stage_app', manifest: null });
   await writeFiles(project, { 'build/stage_app.bin': bare });
+  // These files were written by the test, not by a build this server ran, so
+  // every answer about them is a description of files and never build evidence.
   const compiled = await call('kode_inspect_image', { projectName: 'stage_app' });
   assert.equal(compiled.result.status, 'not_verified');
-  assert.equal(compiled.result.reasonCode, 'IMAGE_NOT_INSTALL_COMPATIBLE');
+  assert.equal(compiled.result.reasonCode, 'BUILD_NOT_OBSERVED');
+  assert.equal(compiled.result.verifiedLayer, 'none');
+  assert.equal(compiled.result.payload.buildObserved, false);
   assert.equal(compiled.result.payload.stage, 'compiled_image');
   assert.equal(compiled.result.artefactSha256, sha256(bare));
 
-  // An install-compatible image is still not device verified.
+  // Files shaped like an install-compatible build are described as such, but
+  // are not accepted as a build, and are never device verified.
   const image = fakeImage({ project: 'stage_app' });
   await writeFiles(project, buildOutputs('stage_app', image));
   const compatible = await call('kode_inspect_image', { projectName: 'stage_app' });
-  assert.equal(compatible.result.status, 'ok');
+  assert.equal(compatible.result.status, 'not_verified');
+  assert.equal(compatible.result.reasonCode, 'BUILD_NOT_OBSERVED');
+  assert.equal(compatible.result.verifiedLayer, 'none');
+  assert.equal(compatible.result.payload.buildObserved, false);
   assert.equal(compatible.result.payload.stage, 'kodeos_install_compatible');
   assert.deepEqual(compatible.result.payload.stages, { sourceProject: true, compiledImage: true, kodeosInstallCompatible: true, deviceVerified: false });
   assert.equal(compatible.result.payload.deviceVerification, 'NOT TESTED');
   assert.equal(compatible.result.artefactSha256, sha256(image));
-  assert.equal(compatible.result.verifiedLayer, 'build');
   assert.equal(compatible.result.requiredNextEvidence.length, 3);
-  assert.match(compatible.result.message, /not been installed or run on any device/);
+  assert.match(compatible.result.message, /not produced by a build this server ran/);
 });
 
 test('an S3 binary supplied for the P4 target is refused over the protocol', async () => {
@@ -410,6 +450,7 @@ test('an S3 binary supplied for the P4 target is refused over the protocol', asy
   assert.equal(isError, true);
   assert.equal(result.status, 'refused');
   assert.equal(result.reasonCode, 'IMAGE_CHIP_MISMATCH');
+  assert.equal(result.verifiedLayer, 'none');
   assert.equal(result.payload.header.chip, 'esp32s3');
   assert.equal(result.payload.stages.kodeosInstallCompatible, false);
 
@@ -446,6 +487,20 @@ test('with a real official template checkout, a scaffolded app pins SDK v0.1.1 a
   const validated = await call('kode_validate', { projectName: 'sensor_reader' });
   assert.equal(validated.result.status, 'ok', JSON.stringify(validated.result.payload.findings.filter((f: { status: string }) => f.status === 'fail')));
   assert.equal(validated.result.payload.sdkRelease, 'v0.1.1');
+  // The build gate, against the real pinned template: an untouched scaffold is
+  // eligible to build, and stops being eligible the moment something that would
+  // run at build time is added.
+  assert.deepEqual(validated.result.payload.buildLogic.findings.filter((f: { status: string; level: string }) => f.status === 'fail' && f.level === 'reject'), []);
+  assert.equal(validated.result.payload.buildLogic.eligible, true);
+  await writeFiles(project, { 'idf_ext.py': 'def action_extensions(base_actions, project_path):\n    return {}\n' });
+  const tampered = await call('kode_validate', { projectName: 'sensor_reader' });
+  assert.equal(tampered.result.payload.buildLogic.eligible, false);
+  await rm(join(project, 'idf_ext.py'));
+  const cmake = await readFile(join(project, 'CMakeLists.txt'), 'utf8');
+  await writeFile(join(project, 'CMakeLists.txt'), `${cmake}\nexecute_process(COMMAND python -c "print(1)")\n`);
+  assert.equal((await call('kode_validate', { projectName: 'sensor_reader' })).result.payload.buildLogic.eligible, false);
+  await writeFile(join(project, 'CMakeLists.txt'), cmake);
+  assert.equal((await call('kode_validate', { projectName: 'sensor_reader' })).result.payload.buildLogic.eligible, true);
   const again = await call('kode_new_app', { projectName: 'sensor_reader', displayName: 'Other', categories: ['tools'] });
   assert.equal(again.result.reasonCode, 'PROJECT_EXISTS');
 });

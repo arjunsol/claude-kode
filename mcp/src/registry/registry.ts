@@ -130,11 +130,21 @@ export class CapabilityRegistry {
       return;
     }
     const records = claim.testRecordIds.map(id => this.testRecords.get(id));
+    // A record only proves the claim it was taken for: same hardware profile, a
+    // board revision the claim is scoped to (an empty list is "not revision
+    // scoped"), the same module for a module claim, and observed no later than
+    // the claim's review date. Otherwise a prototype or another module's run
+    // would read as proof of a production claim.
+    const moduleSubject = /^module:([a-z]+)$/.exec(claim.subject)?.[1];
     const backed = records.some(record => record !== undefined && !record.simulated &&
-      record.result === 'passed' && needed.includes(record.level));
+      record.result === 'passed' && needed.includes(record.level) &&
+      record.board.profileId === claim.scope.profileId &&
+      (claim.scope.boardRevisions.length === 0 || claim.scope.boardRevisions.includes(record.board.revision)) &&
+      (moduleSubject === undefined || record.level !== 'L4' || record.moduleId === moduleSubject) &&
+      record.observedAt <= claim.reviewBy);
     if (!backed) {
       throw new RegistryIntegrityError(
-        `Claim ${claim.id}: state ${claim.state} needs a passed, non-simulated ${needed.join(' or ')} test record.`);
+        `Claim ${claim.id}: state ${claim.state} needs a passed, non-simulated ${needed.join(' or ')} test record for the same profile, board revision and module, observed by its review date.`);
     }
   }
 

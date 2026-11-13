@@ -330,7 +330,11 @@ test('missing build metadata, wrong identity and oversize-for-mailbox are report
     const large = await inspectImage(ws.config, 'demo_app');
     assert.equal(large.size.fitsMailbox, false);
     assert.equal(large.size.fitsCatalogue, true);
-    assert.equal(large.stage, 'kodeos_install_compatible');
+    // The flash plan is mailbox-only, so an image the mailbox cannot hold is not
+    // install-compatible by that route (review finding 8).
+    assert.equal(large.stage, 'compiled_image');
+    assert.equal(large.stages.kodeosInstallCompatible, false);
+    assert.ok(failedChecks(large).includes('app.size'));
   } finally { await ws.close(); }
 });
 
@@ -352,11 +356,17 @@ test('absent, malformed and impossible images are refused with distinct reasons'
 
 // ---- kode_build ----
 
+// A build needs a project whose build logic is the pinned template's, so the
+// fixture scaffolds one from a stand-in template and pins builds to its manifest.
 async function buildFixture(idfVersion: [number, number, number] = [6, 1, 0], commit?: string) {
   const ws = await workspace();
   const idf = await fakeIdf(ws.dir, idfVersion, commit);
-  await writeFiles(join(ws.root, 'demo_app'), projectFiles('demo_app'));
-  return { ...ws, ...idf, config: hostConfigFor({ workspaceRoot: ws.root, buildEnabled: true, ...idf }) };
+  const templateDir = join(ws.dir, 'template');
+  const standIn = standInTemplate();
+  await writeFiles(templateDir, standIn.files);
+  const config = hostConfigFor({ workspaceRoot: ws.root, templateDir, buildEnabled: true, ...idf });
+  await newApp(config, appInput, standIn.manifest);
+  return { ...ws, ...idf, pinnedFiles: standIn.manifest, config };
 }
 type Call = { program: string; args: readonly string[]; cwd: string };
 const recorder = (calls: Call[], behaviour: (call: Call) => Promise<{ exitCode: number | null; timedOut: boolean; output: string }>): BuildRunner =>
@@ -372,10 +382,13 @@ test('a build runs exactly one fixed idf.py build command and reports L1 evidenc
   const image = fakeImage({ project: 'demo_app' });
   try {
     const project = join(f.root, 'demo_app');
-    const outcome = await buildApp(f.config, 'demo_app', recorder(calls, async () => {
-      await writeFiles(project, buildOutputs('demo_app', image));
-      return { exitCode: 0, timedOut: false, output: 'Project build complete.' };
-    }));
+    const outcome = await buildApp(f.config, 'demo_app', {
+      pinnedFiles: f.pinnedFiles,
+      run: recorder(calls, async () => {
+        await writeFiles(project, buildOutputs('demo_app', image));
+        return { exitCode: 0, timedOut: false, output: 'Project build complete.' };
+      }),
+    });
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.program, f.idfPython);
     assert.equal(calls[0]?.cwd, project);
@@ -408,13 +421,13 @@ test('builds are refused when not enabled, misconfigured or on the wrong ESP-IDF
   const f = await buildFixture();
   const old = await buildFixture([6, 0, 1]);
   try {
-    await assert.rejects(buildApp({ ...f.config, buildEnabled: false }, 'demo_app', runner), refuses('BUILD_NOT_ENABLED'));
-    await assert.rejects(buildApp({ ...f.config, idfPath: '' }, 'demo_app', runner), refuses('TOOLCHAIN_NOT_CONFIGURED'));
-    await assert.rejects(buildApp({ ...f.config, idfPython: '' }, 'demo_app', runner), refuses('TOOLCHAIN_NOT_CONFIGURED'));
-    await assert.rejects(buildApp({ ...f.config, idfPath: f.root }, 'demo_app', runner), refuses('TOOLCHAIN_NOT_CONFIGURED'));
-    await assert.rejects(buildApp(old.config, 'demo_app', runner), refuses('TOOLCHAIN_VERSION_MISMATCH'));
-    await assert.rejects(buildApp(f.config, '../demo_app', runner), refuses('PROJECT_NAME_INVALID'));
-    await assert.rejects(buildApp(f.config, 'absent_app', runner), refuses('PROJECT_NOT_FOUND'));
+    await assert.rejects(buildApp({ ...f.config, buildEnabled: false }, 'demo_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('BUILD_NOT_ENABLED'));
+    await assert.rejects(buildApp({ ...f.config, idfPath: '' }, 'demo_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('TOOLCHAIN_NOT_CONFIGURED'));
+    await assert.rejects(buildApp({ ...f.config, idfPython: '' }, 'demo_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('TOOLCHAIN_NOT_CONFIGURED'));
+    await assert.rejects(buildApp({ ...f.config, idfPath: f.root }, 'demo_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('TOOLCHAIN_NOT_CONFIGURED'));
+    await assert.rejects(buildApp(old.config, 'demo_app', { run: runner, pinnedFiles: old.pinnedFiles }), refuses('TOOLCHAIN_VERSION_MISMATCH'));
+    await assert.rejects(buildApp(f.config, '../demo_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('PROJECT_NAME_INVALID'));
+    await assert.rejects(buildApp(f.config, 'absent_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('PROJECT_NOT_FOUND'));
     assert.equal(calls.length, 0);
   } finally { await f.close(); await old.close(); }
 });
@@ -426,8 +439,8 @@ test('a project that fails validation is never built', async () => {
     await writeFiles(join(f.root, 's3_app'), projectFiles('s3_app', { target: 'esp32s3' }));
     await writeFiles(join(f.root, 'os_role'), projectFiles('os_role', { role: false }));
     const runner = recorder(calls, async () => ({ exitCode: 0, timedOut: false, output: '' }));
-    await assert.rejects(buildApp(f.config, 's3_app', runner), refuses('VALIDATION_FAILED'));
-    await assert.rejects(buildApp(f.config, 'os_role', runner), refuses('VALIDATION_FAILED'));
+    await assert.rejects(buildApp(f.config, 's3_app', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('VALIDATION_FAILED'));
+    await assert.rejects(buildApp(f.config, 'os_role', { run: runner, pinnedFiles: f.pinnedFiles }), refuses('VALIDATION_FAILED'));
     assert.equal(calls.length, 0);
   } finally { await f.close(); }
 });
@@ -441,7 +454,7 @@ test('failed, timed-out and empty builds are failures, with no retry and no succ
       [{ exitCode: 0, timedOut: false, output: 'done' }, 'BUILD_OUTPUT_MISSING'],
     ] as const) {
       const calls: Call[] = [];
-      await assert.rejects(buildApp(f.config, 'demo_app', recorder(calls, async () => result)), (error: unknown) => {
+      await assert.rejects(buildApp(f.config, 'demo_app', { pinnedFiles: f.pinnedFiles, run: recorder(calls, async () => result) }), (error: unknown) => {
         refuses(code)(error);
         assert.equal((error as KodeRefusal).status, 'failed');
         return true;
@@ -449,7 +462,7 @@ test('failed, timed-out and empty builds are failures, with no retry and no succ
       assert.equal(calls.length, 1, code);
     }
     const calls: Call[] = [];
-    await assert.rejects(buildApp(f.config, 'demo_app', recorder(calls, async () => { throw new Error('spawn ENOENT'); })), refuses('BUILD_FAILED'));
+    await assert.rejects(buildApp(f.config, 'demo_app', { pinnedFiles: f.pinnedFiles, run: recorder(calls, async () => { throw new Error('spawn ENOENT'); }) }), refuses('BUILD_FAILED'));
     assert.equal(calls.length, 1);
   } finally { await f.close(); }
 });
@@ -458,9 +471,12 @@ test('a build on an unpinned ESP-IDF commit is reported as not reproducibly pinn
   const f = await buildFixture([6, 1, 0], 'a'.repeat(40));
   try {
     const project = join(f.root, 'demo_app');
-    const outcome = await buildApp(f.config, 'demo_app', async () => {
-      await writeFiles(project, buildOutputs('demo_app', fakeImage({ project: 'demo_app' })));
-      return { exitCode: 0, timedOut: false, output: '' };
+    const outcome = await buildApp(f.config, 'demo_app', {
+      pinnedFiles: f.pinnedFiles,
+      run: async () => {
+        await writeFiles(project, buildOutputs('demo_app', fakeImage({ project: 'demo_app' })));
+        return { exitCode: 0, timedOut: false, output: '' };
+      },
     });
     assert.equal(outcome.reproduciblyPinned, false);
     assert.equal(outcome.toolchain.idfCommitMatchesPin, false);

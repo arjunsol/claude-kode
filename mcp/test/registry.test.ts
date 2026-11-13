@@ -185,3 +185,44 @@ test('evidence strength is ordered and the unranked states support nothing', () 
     assert.equal(meetsState(weak, 'advertised'), false);
   }
 });
+
+test('a test record backs only the claim it was taken for: profile, board revision, module and date', () => {
+  const claimWith = (id: string, state: 'device_verified' | 'integration_verified', recordId: string,
+    overrides: Partial<Claim> = {}): Claim =>
+    ({ ...baseClaim(), id, state, testRecordIds: [recordId], conflictsWith: [], ...overrides });
+  const withRecords = (records: TestRecord[], claims: Claim[]): RegistryData => {
+    const data = clone();
+    data.testRecords.push(...records);
+    data.claims.push(...claims);
+    return data;
+  };
+
+  // The archived S3 prototype's L3 run is not proof for the production profile.
+  const prototype = record({ id: 'run.s3', board: { profileId: 'kode-dot-s3-prototype', revision: 'DVT' } });
+  assert.throws(() => new CapabilityRegistry(withRecords([prototype], [claimWith('c.s3', 'device_verified', 'run.s3')])),
+    /same profile, board revision and module/);
+
+  // A record for another board revision is not proof for a claim scoped to DVT.
+  assert.deepEqual(baseClaim().scope.boardRevisions, ['DVT']);
+  const otherRevision = record({ id: 'run.pvt', board: { profileId: PRODUCTION_PROFILE_ID, revision: 'PVT' } });
+  assert.throws(() => new CapabilityRegistry(withRecords([otherRevision], [claimWith('c.pvt', 'device_verified', 'run.pvt')])),
+    /same profile, board revision and module/);
+  // ...but a claim that is not revision scoped does not reject on revision.
+  const unscoped = claimWith('c.unscoped', 'device_verified', 'run.pvt',
+    { scope: { ...baseClaim().scope, boardRevisions: [] } });
+  assert.doesNotThrow(() => new CapabilityRegistry(withRecords([otherRevision], [unscoped])));
+
+  // A maker L4 record is not proof of a camera claim; a camera one is.
+  const maker = record({ id: 'run.maker', level: 'L4', moduleId: 'maker', moduleRevision: 'r1' });
+  const camera = record({ id: 'run.camera', level: 'L4', moduleId: 'camera', moduleRevision: 'r1' });
+  assert.throws(() => new CapabilityRegistry(withRecords([maker],
+    [claimWith('module.camera.proof', 'integration_verified', 'run.maker', { subject: 'module:camera' })])),
+  /same profile, board revision and module/);
+  assert.doesNotThrow(() => new CapabilityRegistry(withRecords([camera],
+    [claimWith('module.camera.proof', 'integration_verified', 'run.camera', { subject: 'module:camera' })])));
+
+  // A record observed after the claim's review date cannot back it.
+  const late = record({ id: 'run.late', observedAt: '2099-01-01' });
+  assert.throws(() => new CapabilityRegistry(withRecords([late], [claimWith('c.late', 'device_verified', 'run.late')])),
+    /observed by its review date/);
+});

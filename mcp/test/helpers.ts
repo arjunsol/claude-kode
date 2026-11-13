@@ -103,7 +103,10 @@ export function standInTemplate(): { files: Record<string, string | Buffer>; man
   const files: Record<string, string | Buffer> = {
     'CMakeLists.txt': 'set(IDF_TARGET esp32p4)\nif(NOT DEFINED PROJECT_VER)\n    set(PROJECT_VER "00.00.01")\nendif()\nproject(my_app)\n',
     'main/app_main.c': '#include "kode.h"\nKODE_APP_MANIFEST("My app", "tools");\nvoid app_main(void) { kode_init(); }\n',
-    'main/idf_component.yml': 'dependencies:\n  kodediy/kode:\n    git: https://github.com/kodediy/kode-sdk.git\n    path: components/kode\n    version: v0.1.0\n',
+    'main/CMakeLists.txt': 'idf_component_register(\n    SRCS "app_main.c"\n    INCLUDE_DIRS "."\n    REQUIRES kode\n)\n',
+    // Like the official manifest, this one explains override_path in a comment:
+    // a rule that rejects the word anywhere in the file would reject the real template.
+    'main/idf_component.yml': '## Sibling components are declared with override_path upstream; an app never sets it.\ndependencies:\n  kodediy/kode:\n    git: https://github.com/kodediy/kode-sdk.git\n    path: components/kode\n    version: v0.1.0\n',
     'sdkconfig.defaults': 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="managed_components/kodediy__kbsp/partitions.csv"\nCONFIG_KODEOS_BOOT_ROLE_APP=y\n',
     'ram_budget.txt': '# check with build/my_app.elf\nstatic_max 364000\n',
     'appdata/app.json': '{"kode": "1", "color": "#028AC2", "description": "An empty app to start from."}',

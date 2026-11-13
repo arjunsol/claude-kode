@@ -68,15 +68,22 @@ export function getCapabilities(deps: KodeDeps, input: z.infer<typeof capabiliti
     }),
     unknowns: selected.filter(evaluation => evaluation.claim.state === 'unknown').map(evaluation => evaluation.claim.statement),
   };
+  // Expiry takes precedence over a conflict: stale evidence says nothing yet.
   const stale = selected.some(evaluation => !evaluation.fresh);
+  const conflicting = selected.filter(evaluation => evaluation.fresh && evaluation.conflicting);
+  const status = stale || conflicting.length > 0 ? 'not_verified' : 'ok';
+  const reasonCode: ReasonCode = stale ? 'EVIDENCE_EXPIRED' : conflicting.length > 0 ? 'EVIDENCE_CONFLICTING' : 'OK';
   return makeResult({
-    tool, effectClass: 'S0', status: stale ? 'not_verified' : 'ok', reasonCode: stale ? 'EVIDENCE_EXPIRED' : 'OK',
+    tool, effectClass: 'S0', status, reasonCode,
     message: stale
       ? 'Some recorded evidence has passed its review date and must be re-verified before it is relied on.'
-      : `Capabilities of ${scope.profile.title} as read from manufacturer source. None has been verified on a physical device.`,
+      : conflicting.length > 0
+        ? `Some recorded claims contradict each other (${conflicting.map(evaluation => evaluation.claim.id).join(', ')}); neither side may be acted on until the conflict is resolved.`
+        : `Capabilities of ${scope.profile.title} as read from manufacturer source. None has been verified on a physical device.`,
     verifiedLayer: layerOf(selected), payload,
     evidence: deps.registry.evidenceRefs(selected.map(evaluation => evaluation.claim)),
     requiredNextEvidence: stale ? ['Re-audit the stale claims against current manufacturer releases.']
+      : conflicting.length > 0 ? ['Resolve each conflicting claim with the manufacturer.']
       : ['A physical identity observation of a production Dot (revision, serial, installed kodeOS release).'],
   });
 }
@@ -318,6 +325,7 @@ const compatibilityPayload = z.object({
   reasons: z.array(z.object({ code: z.string(), detail: z.string() }).strict()),
   evaluatedClaims: z.array(z.object({ claimId: z.string(), required: z.string(), found: z.string() }).strict()),
   requiredNextEvidence: z.array(z.string()), implemented: z.boolean(),
+  cautions: z.array(z.string()),
   advisoryOnly: z.literal(true), grantsAuthorisation: z.literal(false),
 }).strict();
 
@@ -332,10 +340,16 @@ export function checkCompatibility(deps: KodeDeps, input: z.infer<typeof compati
   // Host state is read by the server. It is never taken from tool arguments.
   const decision = evaluateCompatibility(deps.registry, request, { consoleReadsEnabled: consoleConfig(deps.env).enabled }, deps.now());
   const claims = decision.evaluatedClaims.map(item => deps.registry.getClaim(item.claimId)).filter(claim => claim !== undefined);
+  const refused = decision.decision === 'refused';
   return makeResult({
-    tool: 'kode_check_compatibility', effectClass: 'S0', status: 'ok', reasonCode: 'OK',
-    message: decision.decision === 'allowed'
-      ? `Decision: ALLOWED (advisory). The evidence threshold for ${decision.operation} is met. This is not an authorisation.`
+    // A refused decision is a refusal: the tool returns an error with the first
+    // reason (reasons are produced in a fixed rule order), and the whole
+    // decision stays in the payload.
+    tool: 'kode_check_compatibility', effectClass: 'S0',
+    status: refused ? 'refused' : 'ok', reasonCode: decision.reasonCodes[0] ?? 'OK',
+    message: !refused
+      ? `Decision: ALLOWED (advisory). The evidence threshold for ${decision.operation} is met. This is not an authorisation.${
+        decision.cautions.length > 0 ? ` Cautions: ${decision.cautions.join(' ')}` : ''}`
       : `Decision: REFUSED. ${decision.operation} is refused for: ${decision.reasonCodes.join(', ')}.`,
     verifiedLayer: 'source', payload: decision,
     evidence: deps.registry.evidenceRefs(claims),
@@ -372,21 +386,26 @@ export function getSdkContract(deps: KodeDeps, input: z.infer<typeof sdkContract
   const context = { ...scope.context, sdkRelease: release };
   const claims = deps.registry.claimsFor(scope.profile.id).filter(claim => ['sdk', 'console', 'licence'].includes(claim.subject));
   const evaluated = evaluateClaims(deps, claims, context);
-  const text = (id: string) => deps.registry.getClaim(id)?.statement ?? '';
+  // Free text is taken only from a claim that applies to the requested release,
+  // so a fact recorded for v0.1.1 is never printed as a hazard of v0.1.0. A
+  // claim may belong to another subject than those listed in claims[].
+  const text = (id: string) => {
+    const claim = deps.registry.getClaim(id);
+    return claim !== undefined && deps.registry.evaluate(claim, context).applicable ? claim.statement : '';
+  };
   const stale = evaluated.some(evaluation => !evaluation.fresh);
   const hex = (value: number) => `0x${value.toString(16).toUpperCase()}`;
-  const consoleRelease = release in CONSOLE_TOOLS ? release as keyof typeof CONSOLE_TOOLS : 'v0.1.1';
   return makeResult({
     tool, effectClass: 'S0', status: stale ? 'not_verified' : 'ok', reasonCode: stale ? 'EVIDENCE_EXPIRED' : 'OK',
     message: stale ? 'The SDK contract evidence has passed its review date and must be re-verified.'
       : `The kodeOS application contract for kode-sdk ${release}, read from source. Not verified on a device.`,
-    verifiedLayer: 'source',
+    verifiedLayer: layerOf(evaluated) === 'none' ? 'none' : 'source',
     payload: {
       release, pinned: PINNED, previous: PREVIOUS,
       assessedSdkReleases: [...ASSESSED_SDK_RELEASES], assessedKodeosReleases: [...ASSESSED_KODEOS_RELEASES],
       changesInV011: release === 'v0.1.1' ? [...RELEASE_DELTA_V0_1_1] : [],
       toolchain: { idfSeries: `${IDF_SERIES.major}.${IDF_SERIES.minor}`, idfTag: PINNED.idf.tag, idfCommit: PINNED.idf.commit, target: 'esp32p4' },
-      appModel: [text('sdk.app.model'), text('sdk.app.boot_role'), text('sdk.app.active_objects')],
+      appModel: [text('sdk.app.model'), text('sdk.app.boot_role'), text('sdk.app.active_objects')].filter(isPresent),
       manifest: {
         macro: 'KODE_APP_MANIFEST("Display name", "cat1,cat2")', limits: MANIFEST_LIMITS, categories: CATEGORIES,
         identity: text('sdk.app.identity_rules'), dependency: SDK_DEPENDENCY, templatePin: text('sdk.template.pins_previous_sdk'),
@@ -407,22 +426,30 @@ export function getSdkContract(deps: KodeDeps, input: z.infer<typeof sdkContract
           standing: 'Unresolved. The template is still v0.1.0 and the partition table is unchanged in v0.1.1. No raw offset is ever used.',
         },
       },
-      console: { verbs: KCLI_SURFACE, integrity: CONSOLE_TOOLS[consoleRelease], serialOpenResets: text('console.serial_open_resets') },
+      // The kodeOS on a Dot is independent of an app's SDK pin (a Dot can update
+      // itself), so the digests are given for every assessed kodeOS release.
+      console: {
+        verbs: KCLI_SURFACE,
+        integrityByKodeosRelease: Object.fromEntries(ASSESSED_KODEOS_RELEASES.map(kodeos => [kodeos, CONSOLE_TOOLS[kodeos]])),
+        serialOpenResets: text('console.serial_open_resets'),
+      },
       examples: [...SDK_EXAMPLES],
-      licences: [text('licence.sdk'), text('licence.c5'), text('licence.claude_kode')],
+      licences: [text('licence.sdk'), text('licence.c5'), text('licence.claude_kode')].filter(isPresent),
       hazards: [
         text('sdk.template.readme_raw_offset'),
         'idf.py erase-flash is not redirected by the SDK and erases the whole chip, kodeOS included.',
         'Without CONFIG_KODEOS_BOOT_ROLE_APP=y, idf.py flash writes to kodeOS\'s own factory slot.',
         text('board.identity.kodeos_self_update'),
         text('board.c5.secure_boot'),
-      ],
+      ].filter(isPresent),
       claims: evaluated.map(evaluation => claimView(deps.registry, evaluation)),
     },
     evidence: deps.registry.evidenceRefs(evaluated.map(evaluation => evaluation.claim)),
     requiredNextEvidence: ['An observed ESP-IDF v6.1 build of an app (L1).', 'An observed install, run and return to kodeOS on a production Dot (L3).'],
   });
 }
+
+const isPresent = (value: string): boolean => value !== '';
 
 // ---- kode_get_toolchain_status ----
 const toolchainInput = z.object({}).strict();

@@ -11,9 +11,10 @@
 import { createHash } from 'node:crypto';
 import { KodeRefusal } from '../result.js';
 import {
-  CATALOGUE_IMAGE_MAX, CHIP_IDS, IMAGE, MAILBOX, PARTITIONS, REQUIRED_CHIP,
+  CATALOGUE_IMAGE_MAX, CATEGORIES, CHIP_IDS, IMAGE, MAILBOX, MANIFEST_LIMITS, PARTITIONS, REQUIRED_CHIP,
 } from '../registry/sdk-contract.js';
 import { isSupportedIdf } from '../registry/policy.js';
+import type { BuildReceipts } from './receipts.js';
 import { readInside, readTextInside, requireProject, type HostConfig } from './workspace.js';
 
 export type ImageCheck = { id: string; pass: boolean; detail: string };
@@ -40,6 +41,9 @@ export type ImageInspection = {
   };
   stage: 'source_project' | 'compiled_image' | 'kodeos_install_compatible';
   deviceVerification: 'NOT TESTED';
+  /** True only when this server process built exactly these bytes. Files under build/ can be
+   * written by anything, so their presence alone is not evidence that a build ran. */
+  buildObserved: boolean;
 };
 
 /** Larger than anything the apps region could hold: refuse before reading. */
@@ -109,9 +113,7 @@ function parseJson(text: string | undefined): Record<string, unknown> | undefine
   }
 }
 
-const basename = (file: string): string => file.split(/[\\/]/).pop() ?? file;
-
-export async function inspectImage(config: HostConfig, projectName: unknown): Promise<ImageInspection> {
+export async function inspectImage(config: HostConfig, projectName: unknown, receipts?: BuildReceipts): Promise<ImageInspection> {
   const { dir, name } = await requireProject(config, projectName);
   const relative = `build/${name}.bin`;
   let bytes: Buffer | undefined;
@@ -143,8 +145,14 @@ export async function inspectImage(config: HostConfig, projectName: unknown): Pr
   const compiledImage = chipOk && descriptorOk && identityOk;
 
   // ---- Stage 3: the kodeOS app contract, judged from source-level rules ----
-  const manifestOk = check('app.manifest', parsed.manifest !== undefined,
-    parsed.manifest ? `KODE_APP_MANIFEST v${parsed.manifest.version}: "${parsed.manifest.displayName}" in ${parsed.manifest.categories.join(', ')}.`
+  // A manifest that is present but empty, or names categories the catalogue
+  // does not have, is not one the catalogue would accept.
+  const manifestValid = parsed.manifest !== undefined &&
+    parsed.manifest.displayName.length >= 1 && parsed.manifest.displayName.length <= MANIFEST_LIMITS.displayNameMax &&
+    parsed.manifest.categories.length >= 1 && parsed.manifest.categories.length <= MANIFEST_LIMITS.categoriesMax &&
+    parsed.manifest.categories.every(category => (CATEGORIES as readonly string[]).includes(category));
+  const manifestOk = check('app.manifest', manifestValid,
+    parsed.manifest ? `KODE_APP_MANIFEST v${parsed.manifest.version}: "${parsed.manifest.displayName}" in ${parsed.manifest.categories.join(', ') || 'no categories'}${manifestValid ? '.' : `; the catalogue needs a name of 1 to ${MANIFEST_LIMITS.displayNameMax} characters and 1 to ${MANIFEST_LIMITS.categoriesMax} categories from ${CATEGORIES.join(', ')}.`}`
       : 'No readable KODE_APP_MANIFEST ("KAPD") at offset 0x120: kodeOS would treat the app as unmanifested.');
   const sdkconfig = parseJson(await readTextInside(dir, 'build/config/sdkconfig.json', 2 * 1024 * 1024));
   const bootRoleApp = sdkconfig ? sdkconfig.KODEOS_BOOT_ROLE_APP === true : null;
@@ -161,16 +169,18 @@ export async function inspectImage(config: HostConfig, projectName: unknown): Pr
     ? Object.entries(flashFiles as Record<string, unknown>).map(([offset, file]) => ({ offset, file: String(file) }))
     : [];
   const single = flashEntries.length === 1 ? flashEntries[0] : undefined;
-  const mailboxOnly = single !== undefined && Number(single.offset) === MAILBOX.offset && basename(single.file) === `${name}.bin`;
+  const mailboxOnly = single !== undefined && Number(single.offset) === MAILBOX.offset && single.file === `${name}.bin`;
   const flashPlan: ImageInspection['buildMetadata']['flashPlan'] = !flasher ? 'unreadable' : mailboxOnly ? 'mailbox_only' : 'not_mailbox_only';
   const flashOk = check('app.flash_plan', mailboxOnly,
     !flasher ? 'build/flasher_args.json is missing or unreadable, so the generated flash plan was not checked.'
       : mailboxOnly ? `The generated flash plan writes only ${name}.bin at the app_pending offset 0x${MAILBOX.offset.toString(16)}.`
-        : `The generated flash plan is not the single mailbox entry the app role produces: ${flashEntries.map(entry => `${entry.offset}=${basename(entry.file)}`).join(', ') || 'no entries'}.`);
+        : `The generated flash plan is not the single mailbox entry the app role produces: ${flashEntries.map(entry => `${entry.offset}=${entry.file}`).join(', ') || 'no entries'}.`);
   const fitsMailbox = bytes.length <= MAILBOX.imageMax;
   const fitsCatalogue = bytes.length <= CATALOGUE_IMAGE_MAX;
-  const sizeOk = check('app.size', fitsCatalogue && bytes.length <= APPS_REGION,
-    `The image is ${bytes.length} bytes. Catalogue limit ${CATALOGUE_IMAGE_MAX}; mailbox limit ${MAILBOX.imageMax}${fitsMailbox ? '' : ' (too large for the mailbox route; console install only)'}.`);
+  // The flash plan of an app-role build writes only the mailbox, so an image the
+  // mailbox cannot hold is not installable by the route this inspection judges.
+  const sizeOk = check('app.size', fitsCatalogue && bytes.length <= APPS_REGION && (!mailboxOnly || fitsMailbox),
+    `The image is ${bytes.length} bytes. Catalogue limit ${CATALOGUE_IMAGE_MAX}; mailbox limit ${MAILBOX.imageMax}${fitsMailbox ? '' : ' (too large for the mailbox route the flash plan uses)'}.`);
   const kodeosInstallCompatible = compiledImage && idfOk && manifestOk && roleOk && targetOk && flashOk && sizeOk;
 
   const inspection: ImageInspection = {
@@ -183,7 +193,9 @@ export async function inspectImage(config: HostConfig, projectName: unknown): Pr
     stages: { sourceProject: true, compiledImage, kodeosInstallCompatible, deviceVerified: false },
     stage: kodeosInstallCompatible ? 'kodeos_install_compatible' : compiledImage ? 'compiled_image' : 'source_project',
     deviceVerification: 'NOT TESTED',
+    buildObserved: false,
   };
+  inspection.buildObserved = receipts?.observed(name, inspection.artefact.sha256) ?? false;
   if (parsed.appDescriptor) inspection.appDescriptor = parsed.appDescriptor;
   if (parsed.manifest) inspection.manifest = parsed.manifest;
   return inspection;

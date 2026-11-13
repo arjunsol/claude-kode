@@ -6,6 +6,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { buildApp } from '../build/build.js';
 import { inspectImage } from '../build/image.js';
+import { BuildReceipts } from '../build/receipts.js';
 import { newApp } from '../build/scaffold.js';
 import { validateProject } from '../build/validate.js';
 import { hostConfig } from '../build/workspace.js';
@@ -42,6 +43,7 @@ const findingSchema = z.object({ rule: z.string(), level: z.enum(['reject', 'war
 const validatePayload = z.object({
   projectName: z.string(), stage: z.literal('source_project'), verdict: z.enum(['pass', 'fail']),
   findings: z.array(findingSchema), rejectsFailed: z.number(), warnings: z.number(),
+  buildLogic: z.object({ eligible: z.boolean(), findings: z.array(findingSchema) }).strict(),
   manifest: z.object({ displayName: z.string(), categories: z.array(z.string()) }).strict().optional(),
   version: z.string().optional(), sdkRelease: z.string().optional(),
   rulesNotChecked: z.array(z.string()),
@@ -69,6 +71,7 @@ const inspectionSchema = z.object({
   }).strict(),
   stage: z.enum(['source_project', 'compiled_image', 'kodeos_install_compatible']),
   deviceVerification: z.literal('NOT TESTED'),
+  buildObserved: z.boolean(),
 }).strict();
 
 const buildPayload = z.object({
@@ -98,6 +101,12 @@ function inspectionResult(tool: string, inspection: z.infer<typeof inspectionSch
     return { status: 'refused', reasonCode: 'IMAGE_CHIP_MISMATCH',
       message: `The image is built for ${inspection.header.chip}, not the ESP32-P4. It must never be installed on a production Dot.` };
   }
+  // Files under build/ can be written by anything. Without a receipt from a build
+  // this server ran, what was read is a description of files, not build evidence.
+  if (!inspection.buildObserved) {
+    return { status: 'not_verified', reasonCode: 'BUILD_NOT_OBSERVED',
+      message: 'These files were not produced by a build this server ran, so they are reported as found and nothing here is build evidence. Run kode_build to produce an image this server has observed.' };
+  }
   if (inspection.stages.kodeosInstallCompatible) {
     return { status: 'ok', reasonCode: 'OK',
       message: 'The image matches the kodeOS app contract as read from source. It has not been installed or run on any device.' };
@@ -108,6 +117,9 @@ function inspectionResult(tool: string, inspection: z.infer<typeof inspectionSch
 }
 
 export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
+  // One store per server: it is how kode_inspect_image tells an image this
+  // process built from files that merely sit in the build directory.
+  const receipts = deps.receipts ?? new BuildReceipts();
   const evidence = () => deps.registry.evidenceRefs(
     BUILD_CLAIMS.map(id => deps.registry.getClaim(id)).filter(claim => claim !== undefined));
 
@@ -137,7 +149,7 @@ export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
 
   server.registerTool('kode_validate', {
     title: 'Validate a kodeOS app project',
-    description: 'Statically check a workspace project against the pinned SDK contract and the catalogue rules that source alone can decide: identity, ESP32-P4 target, app role, SDK pin, manifest, forbidden flash calls. Lists the rules it cannot check. Reads files only.',
+    description: "Statically check a workspace project against the pinned SDK contract and the catalogue rules that source alone can decide: identity, ESP32-P4 target, app role, SDK pin, manifest, forbidden flash calls. Lists the rules it cannot check. Also reports separately whether the project's build logic is the pinned template's, which kode_build requires and the verdict does not cover. Reads files only.",
     inputSchema: projectInput, outputSchema: resultSchema(validatePayload),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async input => {
@@ -145,11 +157,14 @@ export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
     try {
       const outcome = await validateProject(hostConfig(deps.env), input.projectName);
       const passed = outcome.verdict === 'pass';
+      const eligibility = outcome.buildLogic.eligible
+        ? 'Its build logic matches the pinned template, so kode_build may build it.'
+        : `Its build logic is not the pinned template's, so kode_build will refuse it (${outcome.buildLogic.findings.filter(finding => finding.status === 'fail').map(finding => finding.rule).join(', ')}).`;
       return toToolResult(makeResult({
         tool, effectClass: 'H0', status: passed ? 'ok' : 'not_verified', reasonCode: passed ? 'OK' : 'VALIDATION_FAILED',
         message: passed
-          ? `${outcome.projectName} passes the static checks (${outcome.warnings} warning(s)). This is not the catalogue's own checker and proves nothing about a build or a device.`
-          : `${outcome.projectName} fails ${outcome.rejectsFailed} static check(s) and must not be built for a production Dot as it stands.`,
+          ? `${outcome.projectName} passes the static checks (${outcome.warnings} warning(s)). This is not the catalogue's own checker and proves nothing about a build or a device. ${eligibility}`
+          : `${outcome.projectName} fails ${outcome.rejectsFailed} static check(s) and must not be built for a production Dot as it stands. ${eligibility}`,
         verifiedLayer: 'source', payload: outcome, evidence: evidence(),
         requiredNextEvidence: passed ? ['An observed ESP-IDF v6.1 build (L1).'] : ['Fix the failed checks and validate again.'],
       }));
@@ -158,13 +173,15 @@ export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
 
   server.registerTool('kode_build', {
     title: 'Build a kodeOS app (build only)',
-    description: `Run the fixed command "idf.py build" for a workspace project with the configured ESP-IDF v6.1, after validation. Build only: there is no flash, install, erase or monitor path. Runs project and SDK build scripts on the host and fetches the pinned SDK, so the operator must enable it. ${stageNote}`,
+    description: `Run the fixed command "idf.py build" for a workspace project with the configured ESP-IDF v6.1, after validation. The server passes that one verb and never another, and builds only a project whose build logic matches the pinned template. It cannot constrain what the SDK's own build scripts, or a tampered managed_components directory, do on the host: a build executes CMake and Python and fetches the pinned SDK, so the operator must enable it, and should build with no Dot attached. ${stageNote}`,
     inputSchema: projectInput, outputSchema: resultSchema(buildPayload),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async input => {
     const tool = 'kode_build';
     try {
-      const outcome = await buildApp(hostConfig(deps.env), input.projectName, deps.runBuild);
+      const outcome = await buildApp(hostConfig(deps.env), input.projectName, {
+        ...(deps.runBuild !== undefined ? { run: deps.runBuild } : {}), receipts,
+      });
       const summary = inspectionResult(tool, outcome.inspection);
       return toToolResult(makeResult({
         tool, effectClass: 'H1', ...summary, verifiedLayer: 'build', payload: outcome, evidence: evidence(),
@@ -181,10 +198,12 @@ export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
   }, async input => {
     const tool = 'kode_inspect_image';
     try {
-      const inspection = await inspectImage(hostConfig(deps.env), input.projectName);
+      const inspection = await inspectImage(hostConfig(deps.env), input.projectName, receipts);
       const summary = inspectionResult(tool, inspection);
       return toToolResult(makeResult({
-        tool, effectClass: 'H0', ...summary, verifiedLayer: 'build', payload: inspection, evidence: evidence(),
+        tool, effectClass: 'H0', ...summary,
+        // Whatever the verdict, files this server did not build are not build evidence.
+        verifiedLayer: inspection.buildObserved ? 'build' : 'none', payload: inspection, evidence: evidence(),
         artefactSha256: inspection.artefact.sha256, requiredNextEvidence: DEVICE_GATES,
       }));
     } catch (error) { return toToolResult(refusalResult(tool, 'H0', error)); }

@@ -142,28 +142,57 @@ test('console reads depend on the operator opt-in the server observes, not on ar
   assert.equal(decide({ operation: 'console_read' }, on).decision, 'allowed');
 });
 
+test('an allowed console read carries the cautions: the port resets the Dot and the device is unidentified', () => {
+  const allowed = decide({ operation: 'console_read' }, on);
+  assert.equal(allowed.decision, 'allowed');
+  assert.equal(allowed.cautions.length, 2);
+  assert.match(allowed.cautions[0] ?? '', /resets the Dot/);
+  assert.match(allowed.cautions[1] ?? '', /identity and installed kodeOS release .* unverified/);
+  // Cautions are specific to device reads; host-only operations carry none.
+  for (const operation of hostOperations) assert.deepEqual(decide({ operation }).cautions, [], operation);
+});
+
 test('no input combination ever allows an operation that changes a device, a circuit or the air', () => {
   const physical = operations.filter(operation => !hostOperations.includes(operation) && operation !== 'console_read');
   const modules = [undefined, 'maker', 'robotics', 'camera', 'mesh', 'fck'];
+  // Declaring a fact is never required for a refusal: with every declared
+  // fact omitted the same operations are still refused.
+  const declarations: Array<Partial<CompatibilityRequest>> = [
+    { sdkRelease: 'v0.1.1', kodeosRelease: 'v0.1.1', idfVersion: 'v6.1', imageChip: 'esp32p4' },
+    {},
+  ];
   let evaluated = 0;
   for (const operation of physical) {
     for (const host of [off, on]) {
       for (const moduleId of modules) {
         for (const boardRevision of [undefined, 'DVT']) {
-          const request: Partial<CompatibilityRequest> & { operation: Operation } = {
-            operation, sdkRelease: 'v0.1.1', kodeosRelease: 'v0.1.1', idfVersion: 'v6.1', imageChip: 'esp32p4',
-          };
+          for (const declared of declarations) {
+          const request: Partial<CompatibilityRequest> & { operation: Operation } = { operation, ...declared };
           if (moduleId !== undefined) request.moduleId = moduleId;
           if (boardRevision !== undefined) request.boardRevision = boardRevision;
           const decision = decide(request, host);
           assert.equal(decision.decision, 'refused', `${operation} ${moduleId} ${boardRevision}`);
           assert.equal(decision.grantsAuthorisation, false);
           evaluated++;
+          }
         }
       }
     }
   }
-  assert.equal(evaluated, physical.length * 2 * modules.length * 2);
+  assert.equal(evaluated, physical.length * 2 * modules.length * 2 * declarations.length);
+});
+
+test('console_read is never allowed without the host opt-in, whatever is declared', () => {
+  const declarations: Array<Partial<CompatibilityRequest>> = [
+    {}, { sdkRelease: 'v0.1.1' }, { kodeosRelease: 'v0.1.1' }, { boardRevision: 'DVT' },
+    { sdkRelease: 'v0.1.1', kodeosRelease: 'v0.1.1', idfVersion: 'v6.1', imageChip: 'esp32p4', boardRevision: 'DVT' },
+    { sdkRelease: 'v0.1.0', kodeosRelease: 'v0.1.0' },
+  ];
+  for (const declared of declarations) {
+    const decision = decide({ operation: 'console_read', ...declared }, off);
+    assert.equal(decision.decision, 'refused', JSON.stringify(declared));
+    assert.ok(decision.reasonCodes.includes('CONSOLE_READS_NOT_ENABLED'), JSON.stringify(declared));
+  }
 });
 
 test('the evaluator is deterministic: same input, same decision and reason order', () => {

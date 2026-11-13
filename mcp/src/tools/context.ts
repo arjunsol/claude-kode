@@ -2,6 +2,7 @@
  * build runner; the real server uses the system ones. */
 import { z } from 'zod';
 import type { BuildRunner } from '../build/build.js';
+import type { BuildReceipts } from '../build/receipts.js';
 import type { CapabilityRegistry, ClaimEvaluation, EvaluationContext } from '../registry/registry.js';
 import { sourceUri } from '../registry/registry.js';
 import { ASSESSED_SDK_RELEASES, isAssessedSdkRelease } from '../registry/sdk-contract.js';
@@ -15,6 +16,8 @@ export type KodeDeps = {
   now: () => Date;
   env: NodeJS.ProcessEnv;
   runBuild?: BuildRunner;
+  /** Images this server process built. Created per server when not supplied. */
+  receipts?: BuildReceipts;
 };
 
 export const profileIdSchema = z.string().regex(/^[a-z0-9][a-z0-9_.-]{1,63}$/);
@@ -65,11 +68,14 @@ export type ScopeInput = { profileId: string; boardRevision?: string | undefined
 export function resolveScope(
   deps: KodeDeps, tool: string, effect: EffectClass, input: ScopeInput,
 ): { profile: Profile; context: EvaluationContext } | KodeResult<never> {
-  const fail = (status: 'refused' | 'not_verified', reasonCode: Parameters<typeof makeResult>[0]['reasonCode'], message: string, next: string[] = []) =>
+  // Every scope gate refuses: the tool then returns an MCP tool error, so a
+  // client that reads only the text cannot take a refusal for an answer.
+  // not_verified is kept for answers that are served but cannot be relied on.
+  const fail = (status: 'refused', reasonCode: Parameters<typeof makeResult>[0]['reasonCode'], message: string, next: string[] = []) =>
     makeResult<never>({ tool, effectClass: effect, status, reasonCode, message, requiredNextEvidence: next });
   const profile = deps.registry.getProfile(input.profileId);
   if (!profile) {
-    return fail('not_verified', 'PROFILE_UNKNOWN',
+    return fail('refused', 'PROFILE_UNKNOWN',
       `No hardware profile named ${input.profileId} exists. Known profiles: ${deps.registry.listProfiles().map(item => item.id).join(', ')}.`);
   }
   if (profile.status === 'archived_unreleased_prototype') {
@@ -77,12 +83,12 @@ export function resolveScope(
       'The ESP32-S3 prototype was never released. Its pins, partitions and flash layout are not served, so they cannot be mistaken for production facts.');
   }
   if (input.sdkRelease !== undefined && !isAssessedSdkRelease(input.sdkRelease)) {
-    return fail('not_verified', 'SDK_RELEASE_NOT_ASSESSED',
+    return fail('refused', 'SDK_RELEASE_NOT_ASSESSED',
       `kode-sdk ${input.sdkRelease} has not been audited. Facts recorded for ${ASSESSED_SDK_RELEASES.join(' and ')} are not served for it.`,
       [`Audit kode-sdk ${input.sdkRelease} against the registry.`]);
   }
   if (input.boardRevision !== undefined && !profile.knownBoardRevisions.includes(input.boardRevision)) {
-    return fail('not_verified', 'BOARD_REVISION_NOT_IN_PROFILE',
+    return fail('refused', 'BOARD_REVISION_NOT_IN_PROFILE',
       `Board revision "${input.boardRevision}" is not one the pinned SDK names (${profile.knownBoardRevisions.join(', ')}). Facts recorded for another revision are not served for it.`,
       ['Read the revision from a physical Dot and audit it against manufacturer source.']);
   }
@@ -100,13 +106,15 @@ export function evaluateClaims(deps: KodeDeps, claims: Claim[], context: Evaluat
   return claims.map(claim => deps.registry.evaluate(claim, context)).filter(evaluation => evaluation.applicable);
 }
 
-/** The weakest layer among the sourced claims an answer rests on. */
+/** The weakest layer among the sourced claims an answer rests on. Computed
+ * from the effective state: a stale, conflicting or out-of-scope claim
+ * contributes nothing, so an answer with no usable claim left is `none`. */
 export function layerOf(evaluations: ClaimEvaluation[]): VerifiedLayer {
   const rank: Record<string, number> = { advertised: 1, documented: 1, simulated: 2, source_verified: 3, device_verified: 4, integration_verified: 5 };
   const layers: VerifiedLayer[] = ['none', 'documentation', 'simulation', 'source', 'device', 'integration'];
-  const sourced = evaluations.filter(evaluation => rank[evaluation.claim.state] !== undefined);
+  const sourced = evaluations.filter(evaluation => rank[evaluation.effectiveState] !== undefined);
   if (sourced.length === 0) return 'none';
-  return layers[Math.min(...sourced.map(evaluation => rank[evaluation.claim.state] ?? 0))] ?? 'none';
+  return layers[Math.min(...sourced.map(evaluation => rank[evaluation.effectiveState] ?? 0))] ?? 'none';
 }
 
 /** Turn a service refusal into a result; anything else is an internal failure

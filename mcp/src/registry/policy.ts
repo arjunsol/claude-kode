@@ -118,6 +118,8 @@ export type CompatibilityDecision = {
   reasons: Array<{ code: ReasonCode; detail: string }>;
   evaluatedClaims: Array<{ claimId: string; required: ClaimState; found: string }>;
   requiredNextEvidence: string[];
+  /** What an allowed decision does not cover. Empty for most operations. */
+  cautions: string[];
   implemented: boolean;
   advisoryOnly: true;
   grantsAuthorisation: false;
@@ -231,6 +233,13 @@ export function evaluateCompatibility(
   }
   if (!rule.implemented) add('OPERATION_NOT_IMPLEMENTED', `No Claude Kode tool performs ${request.operation}.`);
 
+  // An allowed decision for a device-touching read still hides two things, so
+  // they travel with it: the registry records that opening the port resets the
+  // chip, and nothing has checked what is on the other end of the cable.
+  const cautions = rule.effect === 'D1' ? [
+    'Opening the USB serial port resets the Dot (recorded as console.serial_open_resets); anything running on it restarts.',
+    'The identity and installed kodeOS release of whatever is on the port are unverified; a Dot can run a kodeOS release this registry has not assessed.',
+  ] : [];
   const reasonCodes = [...new Set(reasons.map(reason => reason.code))];
   return {
     operation: request.operation,
@@ -240,6 +249,7 @@ export function evaluateCompatibility(
     reasons,
     evaluatedClaims: evaluated,
     requiredNextEvidence: [...new Set(next)],
+    cautions,
     implemented: rule.implemented,
     advisoryOnly: true,
     grantsAuthorisation: false,

@@ -5,7 +5,7 @@
  * where the root comes from operator configuration. Every access is checked
  * after symlinks and junctions are resolved.
  */
-import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { KodeRefusal } from '../result.js';
 import { PROJECT_NAME_PATTERN, RESERVED_PROJECT_NAMES } from '../registry/sdk-contract.js';
@@ -115,12 +115,56 @@ export async function readInside(base: string, relativePath: string, maxBytes: n
   if (!isInside(base, resolved)) {
     throw new KodeRefusal('WORKSPACE_ESCAPE', `${relativePath} resolves outside its permitted directory.`);
   }
-  const info = await stat(resolved);
-  if (!info.isFile()) return undefined;
-  if (info.size > maxBytes) {
-    throw new KodeRefusal('VALIDATION_FAILED', `${relativePath} is larger than the ${maxBytes} byte limit for this check.`);
+  // Open once and read from the handle, so the size and link count checked are
+  // those of the bytes read. A race between the realpath check above and this
+  // open is narrowed, not eliminated: the path could be swapped in between.
+  let handle;
+  try {
+    handle = await open(resolved, 'r');
+  } catch {
+    return undefined;
   }
-  return readFile(resolved);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return undefined;
+    // A hard link has no path that names its target, so containment cannot be
+    // judged for it: a file that can be reached by a second name is refused.
+    if (info.nlink > 1) {
+      throw new KodeRefusal('WORKSPACE_ESCAPE', `${relativePath} has more than one hard link, so it may be content from outside its permitted directory.`);
+    }
+    if (info.size > maxBytes) {
+      throw new KodeRefusal('VALIDATION_FAILED', `${relativePath} is larger than the ${maxBytes} byte limit for this check.`);
+    }
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Refuse a project entry that is a link, or whose real path leaves the project.
+ * Used before a build, because idf.py would otherwise write through the link.
+ * A missing entry is fine; a non-directory where `kind` is 'directory' is not. */
+export async function assertRealEntry(projectDir: string, entry: string, kind: 'directory' | 'file'): Promise<void> {
+  const target = join(projectDir, entry);
+  let info;
+  try {
+    info = await lstat(target);
+  } catch {
+    return;
+  }
+  if (info.isSymbolicLink()) {
+    throw new KodeRefusal('WORKSPACE_ESCAPE', `${entry} is a link; only real entries inside the project are used.`);
+  }
+  if (kind === 'directory' ? !info.isDirectory() : !info.isFile()) {
+    throw new KodeRefusal('WORKSPACE_ESCAPE', `${entry} is not a regular ${kind}.`);
+  }
+  if (kind === 'file' && info.nlink > 1) {
+    throw new KodeRefusal('WORKSPACE_ESCAPE', `${entry} has more than one hard link.`);
+  }
+  const resolved = await realpath(target);
+  if (!isInside(projectDir, resolved) || samePath(projectDir, resolved)) {
+    throw new KodeRefusal('WORKSPACE_ESCAPE', `${entry} resolves outside the project.`);
+  }
 }
 
 export async function readTextInside(base: string, relativePath: string, maxBytes = 512 * 1024): Promise<string | undefined> {
