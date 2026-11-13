@@ -1,5 +1,11 @@
 # Production SDK integration — first read-only MCP vertical slice
 
+> **Note, 13 November 2026:** The registry, knowledge tools and build-only pipeline that
+> followed this slice are described in
+> [f1-capability-evidence-build.md](f1-capability-evidence-build.md). The pin has moved from
+> v0.1.0 to v0.1.1 for kode-sdk, KodeOS and kode_slave_c5; v0.1.0 remains an assessed
+> previous release. The text below is the record of the first slice and is unchanged.
+
 **Status:** Implemented in proposed PR only; host logic tested with fake
 console fixtures, **not physically validated**. Date: 13 November 2026.
 

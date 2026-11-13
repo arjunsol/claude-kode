@@ -1,7 +1,7 @@
 {
   "name": "claude-kode",
-  "version": "0.1.0",
-  "description": "Evidence-led Kode Dot P4/C5 development guidance; production loader integration under research",
+  "version": "0.2.0",
+  "description": "Evidence-led Kode Dot P4/C5 development guidance with a source-level capability registry and a build-only MCP pipeline; no device installation",
   "homepage": "https://docs.kode.diy",
   "repository": "https://github.com/arjunsol/claude-kode",
   "license": "MIT",

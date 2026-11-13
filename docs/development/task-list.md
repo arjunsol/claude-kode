@@ -1,6 +1,6 @@
 # Production foundation tasks
 
-Updated 2026-11-04. “Done” means the scoped deliverable exists, not that production
+Updated 2026-11-13. “Done” means the scoped deliverable exists, not that production
 hardware works. Physical release gates remain unmet.
 
 | Task | State | Exit evidence / dependency |
@@ -19,6 +19,10 @@ hardware works. Physical release gates remain unmet.
 | Versioned hardware profiles | Pending | Claim-level provenance, schema and invalidation/refusal tests |
 | ADR-0005 / ADR-0006 policy review | Pending | Explicit decision on refusal and operation authorisation |
 | TypeScript MCP read-only feasibility slice | Linux prototype validated | Pinned SDK/runtime, compiled stdio service, six passing tests; Windows/Claude validation and ADR-0007 acceptance pending |
+| F1 capability registry, evidence and scaffold, build and inspect MCP pipeline (CK-R003) | Implemented in proposed PR; host-tested only | 149 tests, 148 pass, 1 skipped on Windows; independent safety review done before first push (12 confirmed defects fixed, residual risks listed); pins moved to v0.1.1; see f1-capability-evidence-build.md |
+| Real ESP-IDF v6.1 build of a scaffolded app through `kode_build` | Not run | No ESP-IDF v6.1 on the development host; needs an operator build and a recorded L1 result |
+| Resolve raw-offset (`0x1C00000` vs `0x1A00000`) and HTTPS vs SSH SDK pin conflicts | Open | Both persist at v0.1.1; need manufacturer resolution |
+| Device identity, install, recovery and test-evidence tools (F2 and later) | Not implemented | Specified in PR #6; need an observed Dot and an approval channel |
 | Base kodeOS end-to-end demonstration | Blocked | Loader, recovery, build, policy and identified hardware |
 | Five module qualification streams | Pending | Maker, Robotics, Camera, Mesh and F*CK physical evidence |
 | v1 qualification | Pending | All agreed Windows, workflow, module and release gates |
