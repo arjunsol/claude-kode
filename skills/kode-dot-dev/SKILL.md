@@ -101,7 +101,9 @@ modified bootloader, so kodeOS and the app run on separate boots. Because the
 whole image is the unit, its identity must be correct inside the image itself.
 
 The project name given to `project(<name>)` is the app's identity: 1 to 31
-characters of lowercase letters, digits and underscores. `PROJECT_VER` gives
+characters of lowercase letters, digits and underscores, and never `kodeos`,
+`c5_slave` or a Windows reserved device name such as `con`, `nul`, `com1` or
+`lpt1`. `PROJECT_VER` gives
 the version. `KODE_APP_MANIFEST("Display name", "category")` embeds the display
 name and categories in the image. `appdata/app.json` and the icon and
 screenshot files carry catalogue presentation, and are separate from the
@@ -168,9 +170,24 @@ treat the answer as the limit of what you can claim.
    in `main/CMakeLists.txt`, which must stay a single plain
    `idf_component_register(...)` call. If the app genuinely needs more build
    logic, say that `kode_build` cannot build it and stop; do not route around
-   the gate. A leftover `managed_components/` or `dependencies.lock` is
-   reported as `BL-UNVERIFIABLE`: the server cannot check it, so suggest the
-   user delete it.
+   the gate. The gate also refuses any file whose name starts with `Kconfig`
+   (any letter case), so do not add one; that is a precaution, not a
+   demonstrated exploit. A leftover `managed_components/` or
+   `dependencies.lock` is reported as `BL-UNVERIFIABLE`: the server cannot
+   check it, so suggest the user delete it. `kode_build` repeats that warning
+   in its own result (`buildLogicWarnings`), so relay it.
+
+   Every build starts clean. `kode_build` refuses with `BUILD_STATE_PRESENT`
+   while `build/`, `sdkconfig` or `sdkconfig.old` exists in the project,
+   because state that exists before a build cannot be told apart from state
+   someone planted, and a planted `build/` or `sdkconfig` can change what the
+   build runs. So after `kode_build` succeeds, call `kode_inspect_image`
+   first, while `build/` is still there. To build again, remove `build/`,
+   `sdkconfig` and `sdkconfig.old` with your own file tools, then call
+   `kode_build`. The server does not delete them; it never removes files it did
+   not create in the same call. Removing them is expected and safe, because a
+   build generates all three. This removes one way of planting state ahead of
+   a build; it does not make a build safe, and it is still not a sandbox.
 
 ## Reading a result
 
@@ -199,11 +216,19 @@ flash plan naming exactly `<name>.bin`.
 
 Files under `build/` can be written by anything, so `kode_inspect_image` gives
 `ok` and `verifiedLayer: build` only for an image `kode_build` produced in this
-server session. For any other files, including a project built earlier or by
-hand, it returns `not_verified` with `BUILD_NOT_OBSERVED` and
-`verifiedLayer: none`; the payload (`buildObserved: false`) only describes the
-files and is not build evidence. The record is held in memory, so a server
-restart clears it. Run `kode_build` again to get an observed image.
+server session. The record covers three files: the image,
+`build/config/sdkconfig.json` and `build/flasher_args.json`, and changing any
+of them gives `BUILD_NOT_OBSERVED`. For any other files, including a project
+built earlier or by hand, it returns `not_verified` with `BUILD_NOT_OBSERVED`
+and `verifiedLayer: none`; the payload (`buildObserved: false`) only describes
+the files and is not build evidence. The record is held in memory, so a server
+restart clears it. To get an observed image again, remove `build/`, `sdkconfig`
+and `sdkconfig.old` and run `kode_build` again.
+
+If `kode_build` ends with `BUILD_TIMEOUT`, the build process and what was still
+attached to it were ended. A process that detached itself cannot be tracked and
+may still be running, so tell the user that rather than saying the build left
+nothing behind.
 
 When a tool refuses, report the `reasonCode`, the message and the
 `requiredNextEvidence`, and stop. A refusal means a precondition is absent, so

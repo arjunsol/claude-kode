@@ -183,11 +183,14 @@ Code: `mcp/src/build/`, `mcp/src/tools/build-tools.ts`.
   project) and `buildLogic: { eligible, findings }` (whether `kode_build` will accept the
   project). A project can pass the verdict and be ineligible to build.
 - **`kode_build`** requires `KODE_ENABLE_BUILD=1`, an existing project, ESP-IDF v6.1, a
-  passing validation and build logic that is the pinned template's (the build gate, below).
+  project with no `build/`, `sdkconfig` or `sdkconfig.old` (`BUILD_STATE_PRESENT`
+  otherwise; see "Every build is a clean build", below), a passing validation and build
+  logic that is the pinned template's (the build gate, below).
   It runs the one command above without a shell, once, with a deadline (default 1800 s,
   bounds 60 to 7200). It then inspects the image and records a build receipt. It reports
-  whether the ESP-IDF commit equals the pinned v6.1 commit (`reproduciblyPinned`). The
-  evidence it reports is L1 only.
+  whether the ESP-IDF commit equals the pinned v6.1 commit (`reproduciblyPinned`), and
+  carries the build-logic warnings (`buildLogicWarnings`, such as `BL-UNVERIFIABLE`) in its
+  result and message. The evidence it reports is L1 only.
 - **`kode_inspect_image`** keeps four stages apart: source project; compiled image
   (P4 chip id, app descriptor, project identity); kodeOS-install compatible (a source-level
   judgement: ESP-IDF v6.1, `KAPD` manifest with a display name of 1 to 31 characters and 1
@@ -211,9 +214,14 @@ rule ids begin `BL-`) requires:
   (`BL-ROOT-CMAKE`, `BL-SDK-PIN`);
 - `main/CMakeLists.txt` is a single `idf_component_register(...)` call in a small strict
   grammar (`BL-MAIN-CMAKE`);
-- no `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/` or
-  `sdkconfig.defaults.<x>` anywhere in the project (`BL-EXTRA-BUILD-FILE`), found by a walk
-  bounded in depth and entries (`BL-WALK-BOUND`);
+- no `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/`,
+  `sdkconfig.defaults.<x>` or file whose name starts with `Kconfig` (any letter case)
+  anywhere in the project outside `build/` and `managed_components/`
+  (`BL-EXTRA-BUILD-FILE`), found by a walk bounded in depth and entries
+  (`BL-WALK-BOUND`). The `Kconfig*` refusal is a precaution, not a demonstrated exploit:
+  upstream kconfiglib has a preprocessor with a shell function, whether ESP-IDF's variant
+  runs it could not be checked because ESP-IDF is not installed, and the official template
+  has no Kconfig file;
 - no links at the top level or in `main/` and `appdata/` (`BL-LINK`);
 - a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target
   (`BL-SDKCONFIG`).
@@ -225,40 +233,73 @@ verified by the server and is reported as a warning (`BL-UNVERIFIABLE`) that doe
 the project ineligible. The gate narrows what a build runs; it does not make the build a
 sandbox.
 
+### Every build is a clean build
+
+The gate and the static rules read the project's source files. State that exists before the
+build starts is not covered: a planted `build/CMakeCache.txt` whose `CMAKE_PROJECT_INCLUDE`
+pulls in project CMake, a junction inside `build/` that sends output outside the workspace,
+and a root `sdkconfig` whose settings override `sdkconfig.defaults` (the only file the static
+rules read). Generated state that exists before a build cannot be told apart from planted
+state. `kode_build` therefore refuses with `BUILD_STATE_PRESENT` (status `refused`), before
+any process starts, when any of `build/`, `sdkconfig` or `sdkconfig.old` exists in the
+project, and the message names which are present.
+
+The server does not delete them: it never removes files it did not create in the same call.
+The caller removes them with its own file tools and calls `kode_build` again.
+`kode_inspect_image` still reads `build/`, so it is called after a build and before the
+removal. `managed_components/` and `dependencies.lock` stay allowed, because fetching the SDK
+again on every build is not practical; they remain reported as unverifiable. The rule removes
+one way of planting state ahead of a build. It does not make a build safe or a sandbox.
+
 ### Build receipts
 
 Files under `build/` can be written by anything, so their presence proves no build ran.
-`kode_build` records the SHA-256 of the image it produced, in memory, for the life of the
-server process (`mcp/src/build/receipts.ts`). Receipts are deliberately not persisted: a
-file the model's own shell could edit would prove nothing. After a restart every image is
-unattested until it is built again.
+`kode_build` records three SHA-256 digests, in memory, for the life of the server process
+(`mcp/src/build/receipts.ts`): the image, `build/config/sdkconfig.json` and
+`build/flasher_args.json`, with a missing file recorded as absent. An image is observed only
+when all three match, so changing any of them gives `BUILD_NOT_OBSERVED`. Receipts are
+deliberately not persisted: a file the model's own shell could edit would prove nothing.
+After a restart every image is unattested until it is built again.
 
 ### Other build and workspace guards
 
-- At the deadline the whole process tree is ended (Windows: `taskkill /PID <pid> /T /F` by
-  PID; elsewhere the process group). The timeout message says the tree was ended only when
-  that was confirmed.
-- `build/`, `managed_components/` and a root `sdkconfig` that are links are refused before a
-  build, and a file with more than one hard link is refused. The check-then-open race is
+- At the deadline the build process and the processes still attached to it are ended
+  (Windows: `taskkill /PID <pid> /T /F` by PID; elsewhere the process group). A process that
+  detached itself, whose parent has already exited, is not reached, and Node cannot place a
+  child in a Windows Job Object without a native module. The timeout message says only that
+  the attached processes were ended, says that a detached process cannot be tracked and may
+  still be running, and says so when even the attached ending could not be confirmed.
+- `managed_components/` that is a link is refused before a build, and a file with more than
+  one hard link is refused. A pre-existing `build/`, `sdkconfig` or `sdkconfig.old` is
+  refused whether or not it is a link (`BUILD_STATE_PRESENT`). The check-then-open race is
   narrowed, not closed.
-- Rule C12 (flash and OTA calls) scans `main/` recursively over more extensions and matches
-  identifier families. It is a source heuristic: token pasting or a prebuilt library defeats
-  it, and it is not a substitute for checking the built ELF.
+- Rule C12 (flash and OTA calls) scans every text file under `main/` (no NUL byte in the
+  first 8 KiB) whatever its extension, within the depth, count and size bounds, joins
+  backslash-newline line splices before matching, and matches identifier families. It adds a
+  warning when a source under `main/` has an `#include` whose path contains `..`, because
+  files outside `main/` are not scanned. It is a source heuristic: token pasting or a
+  prebuilt library defeats it, and it is not a substitute for checking the built ELF.
 - A parsed project text file over 64 KiB, or with a line over 4096 characters, is rejected
-  (`CK-FILE-BOUND`) without being run through a regex. Values echoed from project files are
-  capped at 64 characters.
+  (`CK-FILE-BOUND`) without being run through a regex. Values echoed from project files and
+  from build metadata are capped at 64 characters, and `kode_inspect_image` reports at most
+  16 flash entries and says when more were present.
+- The mailbox offset in `flasher_args.json` is accepted only as `0x` followed by hex digits,
+  and compared numerically. The manifest check needs a display name with at least one
+  non-space character and distinct categories. Project names that are Windows reserved
+  device names (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`) are refused.
 
 ## Threat model and limitations
 
 - **A build is not a sandbox.** `kode_build` runs the project's and the SDK's CMake and
   Python code on the host and fetches the SDK over the network by tag. That is why it is
   off until the operator sets `KODE_ENABLE_BUILD=1`. The build gate limits the project's own
-  build logic to the pinned template's; the SDK's build scripts still run, and a
-  pre-existing `managed_components/` or `dependencies.lock` cannot be verified. Build with
-  no Dot attached.
+  build logic to the pinned template's, and the clean-build rule refuses a build when state
+  already exists; the SDK's build scripts still run, and a pre-existing `managed_components/`
+  or `dependencies.lock` cannot be verified. Build with no Dot attached.
 - **Build output is not trusted by its presence.** Anything can write under `build/`.
   `kode_inspect_image` gives build-level evidence only for an image this server process
-  built (`BUILD_NOT_OBSERVED` otherwise).
+  built, and only while the image and the two build metadata files match their receipt
+  (`BUILD_NOT_OBSERVED` otherwise).
 - **Claude Code's own shell is outside MCP policy.** This server restricts what its tools
   do. It cannot stop Claude Code from running other tools the host permits, including a raw
   `esptool`. The server only guarantees it offers no such path.
@@ -295,8 +336,8 @@ installed.
 | Before changes: MCP tests | PASS, 14 of 14 |
 | Before changes: Python setup tests | PASS, 13 of 13 |
 | `npm run build` | PASS, clean |
-| `npm test`, no template checkout | PASS: 149 tests, 148 pass, 0 fail, 1 skipped (the real-template test) |
-| `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 149 tests, 148 pass, 0 fail, 1 skipped (the "refused without a template" test); a real scaffold is created, pinned to SDK v0.1.1, passes validation, is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
+| `npm test`, no template checkout | PASS: 163 tests, 162 pass, 0 fail, 1 skipped (the real-template test) |
+| `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 163 tests, 162 pass, 0 fail, 1 skipped (the "refused without a template" test); a real scaffold is created, pinned to SDK v0.1.1, passes validation, is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
 
 Guard-breaking check (safety guards broken one at a time, each expected to turn the suite
 red):
@@ -308,6 +349,12 @@ red):
   were rejected by the compiler, none survived. The 3 are the scope gates: the helper's type
   now admits only `refused`, so a weaker status cannot be written there. Those gates are
   also asserted directly in `protocol-f1.test.ts` and `expiry.test.ts`.
+- Third pass, on the code after the confirmation fixes: 60 guards, the second pass's set
+  re-anchored plus one for each second-pass fix. 56 turned the suite red, 3 were rejected by
+  the compiler (the same scope gates), none survived. One, the rule that a build-gate
+  refusal lists only reject-level findings, did not run in the harness because its
+  multi-line anchor did not match the file's line endings; it was broken by hand instead and
+  its test failed.
 - After each pass every mutated file was confirmed restored.
 
 This check shows that each listed guard is covered by at least one test. It does not show
@@ -335,10 +382,11 @@ Each row names the test file under `mcp/test/` and the test name.
 | Unexpected device commands | `kcli-readonly.test.ts`: only fixed ping and read-only console verbs can reach the runner; runtime refuses a fabricated device-changing command; refuses operations unless the operator explicitly enables serial reads |
 | Falsified user approvals | `protocol-f1.test.ts`: falsified approvals and unknown arguments are rejected by every F1 tool; `policy.test.ts`: no input combination ever allows an operation that changes a device, a circuit or the air; `capabilities.test.ts`: caller-supplied evidence or approval cannot promote a simulation |
 | Attempts to invoke raw flashing | `protocol-f1.test.ts`: tools that do not exist cannot be invoked, including every raw-flash spelling; the server advertises exactly the documented tools and nothing that writes to a device; `policy.test.ts`: raw flashing, erase, OS and C5 updates and standalone firmware are refused whatever is supplied; `build-services.test.ts`: raw flash commands in project documents are reported and never executed |
-| Project build logic other than the pinned template's | `validate-build-logic.test.ts`: a project made by kode_new_app and left alone (eligible, also with an added source file, CRLF endings, a build/ directory); the reviewer's build-logic bypasses are not eligible (execute_process, a second `set(IDF_TARGET ...)`, a bracket comment, `SDKCONFIG_DEFAULTS`, `idf_ext.py` in any letter case, a hostile `main/CMakeLists.txt`, `override_path`, a local `components/kbsp`, root `sdkconfig` forms); the bounded directory walk; validation of a hand-made project stays a harmless read; `review-build.test.ts`: a project with build logic that is not the pinned template is refused before any process starts |
-| Build receipts and image evidence | `review-build.test.ts`: a build records a receipt for its image, and only that exact image is observed; kode_inspect_image reports build evidence only for an image this server built |
-| Install-compatible only when strict | `review-build.test.ts`: an empty or out-of-catalogue manifest, or an image the mailbox cannot hold, is not install-compatible; a flash plan whose file is a path other than `<name>.bin` is not the mailbox plan |
-| Process tree and links at build time | `review-build.test.ts`: the deadline ends the whole process tree, not only the top process; a timeout message says the tree was stopped only when that was confirmed; a build, managed_components or sdkconfig that is a link is refused before any process starts; a real build directory inside the project is still built; a file that is a hard link to content outside the project is refused; a real buildApp run passes exactly the six expected arguments |
+| Project build logic other than the pinned template's | `validate-build-logic.test.ts`: a project made by kode_new_app and left alone (eligible, also with an added source file, CRLF endings, and a build/ directory, which affects only `kode_build`, where it is refused as build state); the reviewer's build-logic bypasses are not eligible (execute_process, a second `set(IDF_TARGET ...)`, a bracket comment, `SDKCONFIG_DEFAULTS`, `idf_ext.py` in any letter case, a hostile `main/CMakeLists.txt`, `override_path`, a local `components/kbsp`, root `sdkconfig` forms); the bounded directory walk; validation of a hand-made project stays a harmless read; `review-build.test.ts`: a project with build logic that is not the pinned template is refused before any process starts |
+| Build receipts and image evidence | `review-build.test.ts`: a build records a receipt for its image, and only that exact image is observed; a receipt covers the image and both build metadata files: changing, removing or adding any one of them is not observed; a metadata file that was absent at the build is recorded as absent and does not match a present file; kode_inspect_image reports build evidence only for an image this server built |
+| Install-compatible only when strict | `review-build.test.ts`: an empty or out-of-catalogue manifest, or an image the mailbox cannot hold, is not install-compatible; a manifest whose name is only spaces, or that repeats a category, is not install-compatible; a flash plan whose file is a path other than `<name>.bin` is not the mailbox plan; only 0x followed by hex digits names the mailbox offset, in either letter case of the digits; strings taken from build metadata are echoed at most 64 characters, and at most 16 flash entries are reported |
+| Clean builds, the build gate and unverifiable state | `review-build.test.ts`: a build, sdkconfig or sdkconfig.old that exists before the build refuses with BUILD_STATE_PRESENT and starts nothing; the refusal names every one of build, sdkconfig and sdkconfig.old that is present; a build runs, a second build is refused, and it builds again once the state is removed; a build that trusts a pre-existing managed_components or dependencies.lock carries the warning in its outcome and message; a build-gate refusal names the rules that caused it, not the warnings beside them; a real buildApp run passes exactly the six expected arguments |
+| Process tree and links at build time | `review-build.test.ts`: the deadline ends the whole process tree, not only the top process; a timeout message claims only what is known, in both branches; a process that detached itself (double fork) survives the deadline, and the message does not say it was ended; a build, managed_components or sdkconfig that is a link is refused before any process starts; a file that is a hard link to content outside the project is refused |
 | Flash-call heuristic and parse bounds | `validate-build-logic.test.ts`: C12 sees the flash and OTA identifiers the review showed it missing; no parsed file can freeze the server; values echoed from a project file are capped at 64 characters; B1 and B2 are not fooled by the reviewer's inputs |
 | Uniform refusals and cautions | `expiry.test.ts`: every scope gate refuses as a tool error, for every knowledge tool; a refused compatibility decision is a tool error with the first reason code and the full payload; an allowed console read says in its message that opening the port resets the Dot; the SDK contract serves release-scoped facts only for their release, and console digests for every kodeOS release; `policy.test.ts`: an allowed console read carries the cautions |
 | Test records scoped to their claim | `registry.test.ts`: a test record backs only the claim it was taken for: profile, board revision, module and date |
@@ -373,6 +421,46 @@ validation. The stand-in template used by the tests had no such comment. Comment
 excluded from the rule, and the stand-in now carries the comment: with the fix removed, ten
 tests fail.
 
+### Confirmation pass on the fixes
+
+After the fixes above, a confirmation pass re-ran the original reviewer's inputs against the
+fixed code. All 13 original inputs were fixed. Six findings were closed outright. Seven had a
+further variation that still got through; each was addressed in a second fix pass.
+
+| Finding | Outcome of the confirmation | Second fix pass |
+|---|---|---|
+| 1 | Original input fixed; a variation got through | Clean build required; unverifiable-SDK warnings carried into the build result; `Kconfig*` files refused |
+| 2 | Original input fixed; a variation got through | Clean build required |
+| 3 | Original input fixed; a variation got through | Timeout message claims only what is known: attached processes ended, a detached process cannot be tracked |
+| 4 | Original input fixed; a variation got through | C12 scans every text file under `main/` and joins line splices; warns on includes that leave `main/` |
+| 5 | Original input fixed; a variation got through | Clean build required |
+| 7 | Original input fixed; a variation got through | Unscoped claims are checked against the profile's known board revisions; any record behind a module claim must name the module |
+| 9 | Original input fixed; a variation got through | Receipt extended to `build/config/sdkconfig.json` and `build/flasher_args.json` |
+| 6, 8, 10, 11, 12, 13 | Closed outright | None needed beyond smaller hardening of 13 (echo caps, mailbox offset, manifest name and categories, reserved project names) |
+
+The second fix pass was checked by re-running the confirmation scripts against the
+integrated code. What they printed:
+
+| Bypass | Result on re-run |
+|---|---|
+| Planted `build/CMakeCache.txt` that includes project CMake (1) | `refused BUILD_STATE_PRESENT`, runner calls 0 |
+| Junction inside `build/` (2) | `refused BUILD_STATE_PRESENT`, runner calls 0 |
+| Root `sdkconfig` with a hostile partition table setting (5) | `refused BUILD_STATE_PRESENT`, runner calls 0 |
+| Process that detaches itself before the deadline (3) | Still survives. The message now says attached processes were ended and that a detached process cannot be tracked |
+| `.c++`, `.cp`, `.sx`, `.hxx` sources, an included `.txt`, a line-spliced identifier (4) | C12 fails each |
+| Record for an unknown revision on an unscoped claim; board-level record behind a module claim (7) | Both refused |
+| Build metadata edited by hand after a real build (9) | `buildObserved=false` |
+| 200,000-character flash file name (13) | Echoed at 64 characters |
+
+Still passing on that re-run, and listed under residual risks or documented limits rather
+than fixed: an identifier assembled by macro concatenation; a header outside `main/` reached
+by a relative include (now reported by the `C12-INCLUDE` warning); flash-related functions
+outside the families C12 lists; and source placed under `appdata/`, which C12 does not scan.
+
+The second fix pass was written by the same kind of agent as the first and was not given a
+further independent adversarial review. The confirmation scripts show the demonstrated
+bypasses are closed; they do not show that no other bypass exists.
+
 ### Residual risks
 
 - `kode_build` is not a sandbox. The SDK's own build scripts run, the component manager
@@ -383,6 +471,15 @@ tests fail.
   not a substitute for checking the built ELF.
 - Build receipts last only for the server process. After a restart every image is
   unattested until it is rebuilt.
+- A process that detaches itself outlives a timed-out build. The deadline ends the build
+  process and what is still attached to it; the timeout message says a detached process
+  cannot be tracked.
+- A pre-existing `managed_components/` is still trusted, with a warning
+  (`BL-UNVERIFIABLE`, repeated in the `kode_build` result).
+- `kode_get_sdk_contract` and `kode_get_evidence` return `ok` while their payload includes
+  the conflicting claims. The conflict is stated in the payload, not in the status.
+- `kode_get_module_spec` for an unknown module returns `unsupported`. That is an answer, not
+  a tool error.
 - The check-then-open race on workspace files is narrowed, not closed.
 - Claude Code's own shell remains outside MCP policy.
 

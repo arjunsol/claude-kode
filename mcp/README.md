@@ -18,8 +18,8 @@ npm run build
 npm test
 ```
 
-`npm test` runs without a device, without ESP-IDF and without network access. It runs 149
-tests: 148 pass and 1 is skipped, with or without the template variable below. One test
+`npm test` runs without a device, without ESP-IDF and without network access. It runs 163
+tests: 162 pass and 1 is skipped, with or without the template variable below. One test
 scaffolds from a real `kode-app-template` v0.1.0 checkout and is skipped unless you set
 `KODE_TEST_TEMPLATE_DIR` to that checkout (an absolute path). With the variable set, the
 test that checks the refusal without a template is skipped instead.
@@ -53,11 +53,12 @@ D1 opens the device's serial port.
 | `kode_get_toolchain_status` | Reports host configuration; starts no process | H0 | Available |
 | `kode_new_app` | Creates a project in the workspace from a verified template checkout | H1 | Needs `KODE_WORKSPACE_ROOT` and `KODE_TEMPLATE_DIR` |
 | `kode_validate` | Static checks of a workspace project; reads files only. Returns a `verdict` and, separately, `buildLogic.eligible` (whether `kode_build` will accept the project) | H0 | Needs `KODE_WORKSPACE_ROOT` |
-| `kode_build` | Runs the one fixed `idf.py build` command, only for a project whose build logic is the pinned template's; not a sandbox | H1 | Needs operator opt-in |
-| `kode_inspect_image` | Parses the built image and build metadata; reads files only. `ok` and `verifiedLayer: build` only for an image `kode_build` produced in this server process; otherwise `BUILD_NOT_OBSERVED` | H0 | Needs `KODE_WORKSPACE_ROOT` |
+| `kode_build` | Runs the one fixed `idf.py build` command, only for a project whose build logic is the pinned template's and which has no `build/`, `sdkconfig` or `sdkconfig.old` yet; not a sandbox | H1 | Needs operator opt-in |
+| `kode_inspect_image` | Parses the built image and build metadata; reads files only. `ok` and `verifiedLayer: build` only for an image `kode_build` produced in this server process, with the image and both metadata files unchanged; otherwise `BUILD_NOT_OBSERVED` | H0 | Needs `KODE_WORKSPACE_ROOT` |
 
 Tools take a project name, never a path. A name is 1 to 31 characters of `a-z`, `0-9` and
-underscore, and is never `kodeos` or `c5_slave`. Projects live at
+underscore, and is never `kodeos`, `c5_slave` or a Windows reserved device name (`con`,
+`prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`). Projects live at
 `<KODE_WORKSPACE_ROOT>/<name>`; links and junctions that leave the workspace are refused.
 No tool accepts a device command, a serial port, a Python executable, a flash offset or an
 approval.
@@ -95,8 +96,10 @@ both as structured content and as JSON text:
 - `status`: `ok`, `refused`, `not_verified`, `unsupported` or `failed`.
 - `reasonCode`: a value from a closed list (for example `BUILD_NOT_ENABLED`), so a caller
   can branch on it. The build gate adds `BUILD_LOGIC_NOT_PINNED` (`kode_build` refused a
-  project whose build logic is not the pinned template's) and `BUILD_NOT_OBSERVED`
-  (`kode_inspect_image` read files this server did not build).
+  project whose build logic is not the pinned template's), `BUILD_STATE_PRESENT`
+  (`kode_build` refused because `build/`, `sdkconfig` or `sdkconfig.old` already exists)
+  and `BUILD_NOT_OBSERVED` (`kode_inspect_image` read files this server did not build, or
+  whose digests no longer match the build).
 - `effectClass`: the tool's effect class.
 - `verifiedLayer`: `none`, `documentation`, `source`, `build`, `simulation`, `device` or
   `integration`. No tool in this slice returns `device` or `integration`.
@@ -163,8 +166,10 @@ from an activated ESP-IDF v6.1 environment; without it the toolchain check refus
 with no shell, one attempt and a bounded time, after the project passes validation and the
 build gate. **A build is not a sandbox.** It runs the SDK's CMake and Python code and
 fetches the pinned SDK over the network by tag. Enable it only for projects you trust, and
-build with no Dot attached. At the deadline the whole process tree is ended; the timeout
-message says so only when that was confirmed.
+build with no Dot attached. At the deadline the build process and the processes still
+attached to it are ended. A process that detached itself cannot be tracked and may still be
+running; the timeout message says so, and says when even the attached ending could not be
+confirmed.
 
 ### What kode_build will and will not build
 
@@ -178,22 +183,43 @@ made by `kode_new_app` whose build logic has not been altered.
   template's once the scaffold's own edits (name, version, SDK release line) are reversed.
 - `main/CMakeLists.txt` must be one `idf_component_register(...)` call with plain relative
   names.
-- No `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/` or
-  `sdkconfig.defaults.<x>`; no links; a root `sdkconfig`, if present, keeps the app role
-  and the ESP32-P4 target.
+- No `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/`,
+  `sdkconfig.defaults.<x>` or file whose name starts with `Kconfig` (any letter case); no
+  links; a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target. The
+  `Kconfig*` refusal is a precaution: Kconfig has a preprocessor that upstream can use to
+  run a shell command, whether ESP-IDF's variant does could not be checked here, and the
+  official template has no such file. It is not a demonstrated exploit.
 
 Still the app author's to edit: source files, `sdkconfig.defaults`, `appdata/` and the
 `SRCS` list in `main/CMakeLists.txt`. `kode_validate` reports the gate as `buildLogic`
 (rule ids begin `BL-`), so a project can pass the verdict and still be ineligible. A
 pre-existing `managed_components/` or `dependencies.lock` cannot be verified; it is
-reported as a warning (`BL-UNVERIFIABLE`) and does not block the build.
+reported as a warning (`BL-UNVERIFIABLE`) and does not block the build. `kode_build`
+carries these warnings in its own result (`buildLogicWarnings`) and in its message.
+
+### Every build is a clean build
+
+`kode_build` refuses with `BUILD_STATE_PRESENT` (status `refused`) when any of `build/`,
+`sdkconfig` or `sdkconfig.old` already exists in the project, before any process starts. The
+message names which are present. State that exists before a build starts cannot be told
+apart from planted state: a planted `build/CMakeCache.txt` can pull project CMake into the
+build, a junction inside `build/` can send output outside the workspace, and a root
+`sdkconfig` can override `sdkconfig.defaults`, which is the only file the static rules read.
+The server does not delete them, because it never removes files it did not create in the
+same call. To build again, the caller removes those three with its own file tools and calls
+`kode_build` again. They are generated, so removing them loses nothing a build does not
+recreate. `kode_inspect_image` still reads `build/` after a build, so call it before
+removing anything. This removes one way of planting state ahead of a build; it does not make
+a build a sandbox.
 
 ### Build receipts
 
-Files under `build/` can be written by anything. `kode_build` records the digest of the
-image it produced, in memory, for the life of the server process, and `kode_inspect_image`
-reports `ok` with `verifiedLayer: build` only for an image with a receipt. Any other image
-is `not_verified` with `BUILD_NOT_OBSERVED` and `verifiedLayer: none`; the payload still
+Files under `build/` can be written by anything. `kode_build` records three SHA-256
+digests, in memory, for the life of the server process: the image,
+`build/config/sdkconfig.json` and `build/flasher_args.json` (a missing file is recorded as
+absent). `kode_inspect_image` reports `ok` with `verifiedLayer: build` only when all three
+match. Changing any of them, or any image without a receipt, gives `not_verified` with
+`BUILD_NOT_OBSERVED` and `verifiedLayer: none`; the payload still
 describes the files (`buildObserved: false`). Receipts are not written to disk, so a server
 restart clears them and every image is unattested until it is built again.
 

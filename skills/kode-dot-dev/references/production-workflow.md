@@ -34,7 +34,8 @@ assessed previous release and any other release is refused.
    (it carries the conflicting raw flash command) and writes a short generated
    one. The project is GPL-3.0-or-later and nothing is overwritten.
 2. The project name is 1 to 31 of a-z, 0-9 and underscore, and is never
-   `kodeos` or `c5_slave`. Set a meaningful `PROJECT_VER` and
+   `kodeos`, `c5_slave` or a Windows reserved device name (`con`, `prn`, `aux`,
+   `nul`, `com1` to `com9`, `lpt1` to `lpt9`). Set a meaningful `PROJECT_VER` and
    `KODE_APP_MANIFEST("Name", "category")`; `appdata/app.json` carries the
    catalogue presentation.
 3. Put custom behaviour in an app-owned Active Object with QP/C events. One
@@ -49,7 +50,9 @@ assessed previous release and any other release is refused.
    `verdict` and, separately, `buildLogic: { eligible, findings }`, whether
    `kode_build` will accept the project. A project can pass the verdict and be
    ineligible to build. The flash-call rule (C12) is a source heuristic, not a
-   guarantee about the built ELF.
+   guarantee about the built ELF: it scans every text file under `main/`,
+   joins backslash-newline splices, and warns about an `#include` that leaves
+   `main/`, because files outside `main/` are not scanned.
 6. `kode_build` needs `KODE_ENABLE_BUILD=1`, `KODE_IDF_PATH`, `KODE_IDF_PYTHON`
    and a server started from an activated ESP-IDF v6.1 environment. It runs
    exactly `<KODE_IDF_PYTHON> <KODE_IDF_PATH>/tools/idf.py -C <project> -B
@@ -61,20 +64,36 @@ assessed previous release and any other release is refused.
    build logic is the pinned template's and refuses the rest with
    `BUILD_LOGIC_NOT_PINNED`. For a project you intend to build, do not add an
    `idf_ext.py`, extra `*.cmake` or `CMakeLists.txt` files, a `components/`
-   directory or `sdkconfig.defaults.<x>` files, and do not alter the root
+   directory, `sdkconfig.defaults.<x>` or `Kconfig*` files (the last a
+   precaution, not a demonstrated exploit), and do not alter the root
    `CMakeLists.txt` or `main/idf_component.yml`. Source files,
    `sdkconfig.defaults`, `appdata/` and the `SRCS` list in `main/CMakeLists.txt`
    are yours to edit. A pre-existing `managed_components/` or
-   `dependencies.lock` cannot be verified (`BL-UNVERIFIABLE`, a warning).
+   `dependencies.lock` cannot be verified (`BL-UNVERIFIABLE`, a warning that
+   `kode_build` repeats in its result). If the build runs past its deadline,
+   the build process and what is still attached to it are ended; a process that
+   detached itself cannot be tracked and may still be running.
+
+   Every build starts clean. `kode_build` refuses with `BUILD_STATE_PRESENT`
+   while `build/`, `sdkconfig` or `sdkconfig.old` exists, because state that
+   exists before a build cannot be told apart from planted state, and planted
+   state can change what the build runs. After a build, call
+   `kode_inspect_image` before removing anything, since it reads `build/`. To
+   build again, remove `build/`, `sdkconfig` and `sdkconfig.old` with your own
+   file tools, then call `kode_build`. The server does not delete them. Removing
+   them is expected and safe, because a build generates all three. It removes
+   one way of planting state; it does not make a build safe or a sandbox.
 7. `kode_inspect_image` parses the built image and build metadata. It keeps
    four stages apart: source project, compiled image, kodeOS-install
    compatible (a source-level judgement, strict about the manifest name and
    categories, mailbox fit and a flash plan naming `<name>.bin`) and device
    verified, which is never claimed and always `NOT TESTED`. It reports `ok`
    and `verifiedLayer: build` only for an image `kode_build` produced in this
-   server session. For files it did not build it returns `BUILD_NOT_OBSERVED`
-   with `verifiedLayer: none`; that is a description of files, not build
-   evidence, and a server restart clears the record.
+   server session, and only while the image, `build/config/sdkconfig.json` and
+   `build/flasher_args.json` are unchanged since the build. For files it did not
+   build, or files changed since, it returns `BUILD_NOT_OBSERVED` with
+   `verifiedLayer: none`; that is a description of files, not build evidence,
+   and a server restart clears the record.
 8. Run the [catalogue's RULES.md](https://github.com/kodediy/kode-apps/blob/main/RULES.md)
    checks where available. Passing them is not physical proof.
 

@@ -110,12 +110,22 @@ project's CMake and would import a project `idf_ext.py`. `kode_validate`
 reports it separately from the verdict as `buildLogic` (rule ids `BL-...`), and
 a project that fails it is refused with `BUILD_LOGIC_NOT_PINNED`. Source files,
 `sdkconfig.defaults`, `appdata/` and the `SRCS` list stay the author's to edit.
-It narrows what a build runs; a build is still not a sandbox.
+It also refuses any file whose name starts with `Kconfig`, as a precaution rather
+than a demonstrated exploit. It narrows what a build runs; a build is still not a
+sandbox.
 
-**Build receipt:** The digest of an image that `kode_build` produced, held in
+**Clean build:** The rule that `kode_build` starts from a project with no `build/`,
+`sdkconfig` or `sdkconfig.old`, because state that exists before a build cannot be
+told apart from planted state. A project with any of them is refused with
+`BUILD_STATE_PRESENT`. The server never deletes them; the caller removes them with
+its own file tools, after calling `kode_inspect_image`, which reads `build/`. It
+removes one way of planting state ahead of a build; a build is still not a sandbox.
+
+**Build receipt:** Three digests, of the image, `build/config/sdkconfig.json` and
+`build/flasher_args.json`, recorded when `kode_build` produced them and held in
 memory for the life of the server process. `kode_inspect_image` reports `ok`
-and `verifiedLayer: build` only for an image with a receipt; any other files
-are `not_verified` with `BUILD_NOT_OBSERVED`. A server restart clears every
+and `verifiedLayer: build` only when all three match; any other files, or a changed
+one, are `not_verified` with `BUILD_NOT_OBSERVED`. A server restart clears every
 receipt.
 
 **Mailbox offset conflict:** The partition table puts `app_pending` at
