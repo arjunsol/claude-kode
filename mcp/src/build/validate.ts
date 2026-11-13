@@ -145,42 +145,107 @@ function withoutYamlComment(line: string): string {
   return line;
 }
 
-/** Every line break a reader of text may honour: LF, CRLF and a lone CR. Kconfig opens its files
- * with universal newlines, and C preprocessors and YAML parsers treat a lone CR as a line end, so
- * a check that splits on LF alone sees one line where they see two. */
+/** Every line break a reader of text may honour: LF, CRLF and a lone CR. C preprocessors and YAML
+ * parsers treat a lone CR as a line end, so a check that splits on LF alone sees one line where
+ * they see two. (Configuration files read by the Kconfig rules are stricter: see unreadableByte.) */
 const LINE_BREAK = /\r\n|\r|\n/;
 
-/** What Kconfig makes of the text after "=": a quoted string keeps its quotes and loses an
- * inline comment after the closing quote; any other value loses a "#" comment (esp-idf-kconfig
- * strips an inline comment from an unquoted value). Reading the unquoted case from the FIRST
- * "#" is wider than Kconfig's whitespace rule on purpose, which can only refuse more. */
-function kconfigValue(raw: string): string {
-  const value = raw.trim();
-  if (value.startsWith('"')) {
-    const quoted = /^"(?:[^"\\]|\\.)*"/.exec(value);
-    if (quoted !== null && /^\s*(?:#.*)?$/.test(value.slice(quoted[0].length))) return quoted[0];
-    return value;
+/** The first byte of a configuration file that this module will not read, or undefined. The only
+ * bytes read are printable ASCII (0x20 to 0x7E), tab, LF, and CR when it is followed by LF. Every
+ * other byte is refused, wherever it sits: a lone CR, the other C0 controls (0x1C to 0x1F among
+ * them), DEL, NEL, U+2028, a byte order mark, anything that is not ASCII. The reasons are
+ * concrete: Kconfig and Python treat several of these as line ends or as whitespace to strip, and
+ * a JavaScript reader treats them as ordinary text, so the two read different lines. Refusing
+ * them leaves nothing for the two readers to disagree about. The line number counts LF. */
+function unreadableByte(text: string): { line: number; detail: string } | undefined {
+  let line = 1;
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at);
+    if (code === 0x0A) { line += 1; continue; }
+    if (code === 0x09 || (code >= 0x20 && code <= 0x7E)) continue;
+    if (code === 0x0D && text.charCodeAt(at + 1) === 0x0A) continue;
+    return { line, detail: code === 0x0D ? 'a carriage return that is not followed by a line feed' : `the character U+${code.toString(16).toUpperCase().padStart(4, '0')}` };
   }
-  const hash = value.indexOf('#');
-  return hash < 0 ? value : value.slice(0, hash).trimEnd();
+  return undefined;
 }
 
-/** Every assignment of every symbol, in file order. Kconfig reads "CONFIG_X=value" and
- * "# CONFIG_X is not set" (which is X=n), and a later line beats an earlier one. This reads
- * both forms on purpose a little more widely than Kconfig does (indented, any case in the
- * name, text after "is not set"): reading wider can only refuse more. One bounded line at a
- * time; the caller has already applied exceedsParseBounds. */
-function parseKconfigAssignments(text: string): Map<string, string[]> {
+/** The forms of a line of sdkconfig.defaults that are read. Kept small on purpose: for each one the
+ * validator and esp-idf-kconfig 3.14.0's kconfgen provably read the same value (the proof is the
+ * script recorded in the design record, run against the real kconfgen). Every other line makes the
+ * file unreadable with certainty, and the project not eligible to build. */
+const DEFAULTS_ASSIGNMENT = /^CONFIG_([A-Z0-9_]+)=(y|n|0|-?[1-9][0-9]*|0x[0-9a-fA-F]+|"[\x20\x21\x23-\x5B\x5D-\x7E]*")$/;
+const DEFAULTS_UNSET = /^# CONFIG_([A-Z0-9_]+) is not set$/;
+/** A comment Kconfig acts on: the deprecated-options block markers and the "# default:" pragma. Matched
+ * loosely (any case, any spacing, any text after), because a near miss that Kconfig does read is the danger. */
+const DEFAULTS_PRAGMA = /^#\s*(?:default\s*:|deprecated\s+options|end\s+of\s+deprecated\s+options)/i;
+/** A comment that looks like an "is not set" line but is not exactly the accepted one. */
+const DEFAULTS_UNSET_NEAR_MISS = /^#\s*CONFIG_\S*\s+is\s+not\s+set/i;
+const DEFAULTS_FORMS = 'Accepted lines are: an empty line; a comment starting with "#" (other than the "# default:" pragma, the deprecated-options markers, and any "is not set" line that is not exactly "# CONFIG_NAME is not set"); exactly CONFIG_NAME=value with no space around "=", NAME of A-Z, 0-9 and _, and a value that is y, n, a decimal, a 0x hex number, or a double-quoted string of printable ASCII with no backslash and no inner double quote; and exactly "# CONFIG_NAME is not set". Anything else, including a space, an inline comment or a non-ASCII byte anywhere, is refused.';
+
+/** The symbols the static rules read, by Kconfig type. Kconfig ignores (with a warning) an assignment whose value
+ * does not fit the symbol's type, and keeps the earlier value; a reader that took the value at face value would
+ * then see "not n" where Kconfig sees n. So for these symbols the type is enforced here, and a line of the
+ * wrong type refuses the file. Booleans: y or n, or the unset form. The partition table: a quoted string. */
+const TRACKED_BOOLS: readonly string[] = [
+  'KODEOS_BOOT_ROLE_APP', 'KODEOS_BOOT_ROLE_OS', 'KODEOS_HOME_HOLD', 'KQP_AO_WATCH',
+  'KODEOS_RADIO', 'ESP_HOSTED_ENABLED', 'BT_ENABLED',
+];
+const TRACKED_STRINGS: readonly string[] = ['PARTITION_TABLE_CUSTOM_FILENAME'];
+
+/** Why a line is not read, or undefined when it is one of the accepted forms. */
+function defaultsLineProblem(line: string): string | undefined {
+  if (line === '') return undefined;
+  if (line.startsWith('#')) {
+    const unset = DEFAULTS_UNSET.exec(line);
+    if (unset !== null) {
+      return TRACKED_STRINGS.includes(unset[1] ?? '') ? `CONFIG_${unset[1]} is a string setting, so it has no "is not set" form` : undefined;
+    }
+    if (DEFAULTS_PRAGMA.test(line)) return 'it is a deprecated-options marker or the "# default:" pragma, which Kconfig acts on';
+    if (DEFAULTS_UNSET_NEAR_MISS.test(line)) return 'it looks like an "is not set" line but is not exactly "# CONFIG_NAME is not set"';
+    return undefined;
+  }
+  const assignment = DEFAULTS_ASSIGNMENT.exec(line);
+  if (assignment === null) return 'it is not one of the accepted forms';
+  const name = assignment[1] ?? '';
+  const value = assignment[2] ?? '';
+  if (TRACKED_BOOLS.includes(name) && value !== 'y' && value !== 'n') return `CONFIG_${name} is a boolean setting and takes only y or n`;
+  if (TRACKED_STRINGS.includes(name) && !value.startsWith('"')) return `CONFIG_${name} is a string setting and takes only a double-quoted string`;
+  return undefined;
+}
+
+/** The first line of sdkconfig.defaults that the validator cannot read with certainty, or undefined.
+ * The byte rule is applied to the whole file first, comments included. */
+export function sdkconfigDefaultsProblem(text: string): { line: number; reason: string } | undefined {
+  const bad = unreadableByte(text);
+  if (bad !== undefined) return { line: bad.line, reason: `it holds ${bad.detail}; only printable ASCII, tab, LF and CRLF are read` };
+  const lines = text.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const raw = lines[index] as string;
+    const reason = defaultsLineProblem(raw.endsWith('\r') ? raw.slice(0, -1) : raw);
+    if (reason !== undefined) return { line: index + 1, reason };
+  }
+  return undefined;
+}
+
+const defaultsProblemMessage = (problem: { line: number; reason: string }): string =>
+  `sdkconfig.defaults line ${problem.line} cannot be read with certainty: ${problem.reason}. ${DEFAULTS_FORMS}`;
+
+/** Every assignment of every symbol, in file order. Only for a file that passed sdkconfigDefaultsProblem:
+ * it reads exactly the two assignment forms, "CONFIG_X=value" and "# CONFIG_X is not set" (which is
+ * X=n), and a later line beats an earlier one, as in Kconfig. A line of any other shape is not read
+ * at all (the caller refuses the file), so this never has to imitate how Kconfig reads one. */
+export function parseKconfigAssignments(text: string): Map<string, string[]> {
   const map = new Map<string, string[]>();
   const add = (key: string, value: string) => {
     const seen = map.get(key);
     if (seen === undefined) map.set(key, [value]); else seen.push(value);
   };
-  for (const line of text.split(LINE_BREAK)) {
-    const assignment = /^\s*(CONFIG_[A-Za-z0-9_]+)\s*=(.*)$/.exec(line);
-    if (assignment?.[1] !== undefined && assignment[2] !== undefined) { add(assignment[1], kconfigValue(assignment[2])); continue; }
-    const unset = /^\s*#\s*(CONFIG_[A-Za-z0-9_]+)\s+is\s+not\s+set/.exec(line);
-    if (unset?.[1] !== undefined) add(unset[1], 'n');
+  for (const raw of text.split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    const assignment = DEFAULTS_ASSIGNMENT.exec(line);
+    if (assignment?.[1] !== undefined && assignment[2] !== undefined) { add(`CONFIG_${assignment[1]}`, assignment[2]); continue; }
+    const unset = DEFAULTS_UNSET.exec(line);
+    if (unset?.[1] !== undefined) add(`CONFIG_${unset[1]}`, 'n');
   }
   return map;
 }
@@ -589,6 +654,16 @@ async function checkBuildLogic(dir: string, name: string, pinnedFiles: TemplateM
     `The project was inspected completely (up to ${WALK_MAX_DEPTH} levels and ${WALK_MAX_ENTRIES} entries).`,
     `The project is deeper than ${WALK_MAX_DEPTH} levels, has more than ${WALK_MAX_ENTRIES} entries, or could not be read, so it could not be inspected completely.`);
 
+  // 4b. sdkconfig.defaults is read by the rules B3, B4, B7, D8 and C2-WATCH only as lines of the accepted
+  // grammar. Any other line, or any byte outside printable ASCII, tab, LF and CRLF, means the file is not
+  // read with certainty and the project is not eligible to build.
+  const defaultsFile = await readGateFile(dir, 'sdkconfig.defaults', PARSE_FILE_LIMIT);
+  const defaultsFileProblem = defaultsFile.text === undefined ? undefined : sdkconfigDefaultsProblem(defaultsFile.text);
+  gate('BL-DEFAULTS-GRAMMAR', !defaultsFile.tooBig && defaultsFileProblem === undefined,
+    defaultsFile.text === undefined ? 'There is no sdkconfig.defaults to read.' : 'sdkconfig.defaults holds only lines of the accepted grammar.',
+    defaultsFile.tooBig ? `sdkconfig.defaults is over ${PARSE_FILE_LIMIT} bytes or has a line over ${PARSE_LINE_LIMIT} characters, so it was not read.`
+      : defaultsFileProblem === undefined ? '' : defaultsProblemMessage(defaultsFileProblem));
+
   // 5. A root sdkconfig overrides sdkconfig.defaults; it must keep the app role and the chip.
   const sdkconfig = await readGateFile(dir, 'sdkconfig', SDKCONFIG_LIMIT);
   let sdkconfigOk = true;
@@ -597,8 +672,13 @@ async function checkBuildLogic(dir: string, name: string, pinnedFiles: TemplateM
     sdkconfigOk = false; sdkconfigWhy = `sdkconfig is over ${SDKCONFIG_LIMIT} bytes.`;
   } else if (sdkconfig.text !== undefined) {
     const text = sdkconfig.text;
+    const sdkconfigByte = unreadableByte(text);
     if (text.split('\n').some(line => line.length > 4096)) {
       sdkconfigOk = false; sdkconfigWhy = 'sdkconfig has a line over 4096 characters.';
+    } else if (sdkconfigByte !== undefined) {
+      sdkconfigOk = false; sdkconfigWhy = `sdkconfig line ${sdkconfigByte.line} holds ${sdkconfigByte.detail}; only printable ASCII, tab, LF and CRLF are read.`;
+    } else if (text.split('\n').some(line => DEFAULTS_PRAGMA.test(line.trimStart()))) {
+      sdkconfigOk = false; sdkconfigWhy = 'sdkconfig holds a deprecated-options marker or a "# default:" pragma, which Kconfig acts on.';
     } else {
       const role = kconfigAssignments(text, 'CONFIG_KODEOS_BOOT_ROLE_APP');
       const chip = kconfigAssignments(text, 'CONFIG_IDF_TARGET');
@@ -683,29 +763,51 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
 
   // ---- sdkconfig.defaults: role, partition table, radio trio ----
   const defaultsRaw = await readParsed('sdkconfig.defaults');
-  const assignments = parseKconfigAssignments(defaultsRaw ?? '');
+  // The rules below read only lines of the small accepted grammar. A file with any other line (or
+  // any byte outside printable ASCII, tab, LF and CRLF) is not read with certainty: it fails here,
+  // and every rule that reads it fails with it. The validator never imitates Kconfig's own reader.
+  const defaultsProblem = defaultsRaw === undefined ? undefined : sdkconfigDefaultsProblem(defaultsRaw);
+  check('CK-DEFAULTS-GRAMMAR', 'reject', defaultsProblem === undefined,
+    'sdkconfig.defaults holds only lines of the accepted grammar.',
+    defaultsProblem === undefined ? '' : defaultsProblemMessage(defaultsProblem));
+  const readable = defaultsProblem === undefined;
+  const assignments = parseKconfigAssignments(readable ? defaultsRaw ?? '' : '');
+  // The last-value rules (B3, B7) read the last assignment of a symbol. Kconfig keeps the last
+  // one too, and on the accepted grammar the two readers agree on which line it is.
   const lastOf = (key: string): string | undefined => assignments.get(key)?.at(-1);
-  // Kconfig keeps the last assignment, but a never-off rule judges EVERY assignment of its
-  // symbol, so no later or earlier line can be relied on to win.
+  // A never-off rule judges EVERY assignment of its symbol, so no later or earlier line can be
+  // relied on to win.
   const allOf = (key: string): string[] => assignments.get(key) ?? [];
   const defaults = { get: lastOf };
+  const readRule = (rule: string, ok: boolean, pass: string, fail: string) =>
+    check(rule, 'reject', readable && ok, pass,
+      readable ? fail : 'sdkconfig.defaults could not be read with certainty (see CK-DEFAULTS-GRAMMAR), so this rule cannot pass.');
   const appRole = allOf('CONFIG_KODEOS_BOOT_ROLE_APP');
-  check('B4', 'reject', appRole.length > 0 && appRole.every(value => value === 'y') &&
+  readRule('B4', appRole.length > 0 && appRole.every(value => value === 'y') &&
       allOf('CONFIG_KODEOS_BOOT_ROLE_OS').every(value => value === 'n'),
     'CONFIG_KODEOS_BOOT_ROLE_APP=y: the firmware takes the app role.',
     'sdkconfig.defaults must set CONFIG_KODEOS_BOOT_ROLE_APP=y, every time it is assigned, and never set CONFIG_KODEOS_BOOT_ROLE_OS to anything but n ("# ... is not set" counts as n and "CONFIG_KODEOS_BOOT_ROLE_APP is not set" is refused). Without the app role, idf.py flash targets kodeOS\'s own slot.');
-  check('B3', 'reject', defaults.get('CONFIG_PARTITION_TABLE_CUSTOM_FILENAME') === `"${PARTITION_TABLE_SETTING}"`,
+  // The other symbols of the partition-table family are the other members of Kconfig's choice (and its
+  // offset), so naming any of them changes which table is used without touching the filename line. The
+  // accepted set is narrowed rather than the choice semantics read: only the filename line is allowed.
+  const otherTableSymbols = [...assignments.keys()].filter(key =>
+    key.startsWith('CONFIG_PARTITION_TABLE_') && key !== 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME');
+  readRule('B3', defaults.get('CONFIG_PARTITION_TABLE_CUSTOM_FILENAME') === `"${PARTITION_TABLE_SETTING}"` && otherTableSymbols.length === 0,
     'The partition table comes from the fetched board support package.',
-    `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME must be "${PARTITION_TABLE_SETTING}".`);
-  if (defaults.get('CONFIG_KODEOS_RADIO') === 'n') {
-    check('B7', 'reject', defaults.get('CONFIG_ESP_HOSTED_ENABLED') === 'n' && defaults.get('CONFIG_BT_ENABLED') === 'n',
+    otherTableSymbols.length > 0
+      ? `sdkconfig.defaults must not set ${otherTableSymbols.slice(0, 5).map(echo).join(', ')}: any other CONFIG_PARTITION_TABLE_* setting selects a different partition table through Kconfig. Only CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="${PARTITION_TABLE_SETTING}" is accepted.`
+      : `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME must be "${PARTITION_TABLE_SETTING}".`);
+  // A radio that is not assigned takes its Kconfig default, which is off for the app role, so B7 applies
+  // to everything except a radio whose last value is y.
+  if (!readable || defaults.get('CONFIG_KODEOS_RADIO') !== 'y') {
+    readRule('B7', defaults.get('CONFIG_ESP_HOSTED_ENABLED') === 'n' && defaults.get('CONFIG_BT_ENABLED') === 'n',
       'The radio is off together with esp-hosted and Bluetooth.',
-      'CONFIG_KODEOS_RADIO=n (or "# CONFIG_KODEOS_RADIO is not set") must come with CONFIG_ESP_HOSTED_ENABLED=n and CONFIG_BT_ENABLED=n, in either form.');
+      'Unless CONFIG_KODEOS_RADIO=y is the last radio line, the radio is off (CONFIG_KODEOS_RADIO=n, "# CONFIG_KODEOS_RADIO is not set", or no line at all, which takes the app-role default of off) and must come with CONFIG_ESP_HOSTED_ENABLED=n and CONFIG_BT_ENABLED=n, in either form.');
   }
-  check('D8', 'reject', allOf('CONFIG_KODEOS_HOME_HOLD').every(value => value === 'y'),
+  readRule('D8', allOf('CONFIG_KODEOS_HOME_HOLD').every(value => value === 'y'),
     'Holding BOT still returns to kodeOS.',
     'CONFIG_KODEOS_HOME_HOLD is refused unless every assignment is exactly y (CONFIG_KODEOS_HOME_HOLD=n and "# CONFIG_KODEOS_HOME_HOLD is not set" are both refused): holding BOT must always return to kodeOS.');
-  check('C2-WATCH', 'reject', allOf('CONFIG_KQP_AO_WATCH').every(value => value === 'y'),
+  readRule('C2-WATCH', allOf('CONFIG_KQP_AO_WATCH').every(value => value === 'y'),
     'The Active Object watchdog is left on.',
     'CONFIG_KQP_AO_WATCH is refused by the catalogue unless every assignment is exactly y (=n and "# CONFIG_KQP_AO_WATCH is not set" are both refused).');
   const rootFiles = await listFiles(dir, ['']);
@@ -715,6 +817,12 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
 
   // ---- main/idf_component.yml: the SDK pin ----
   const manifestYaml = await readParsed('main/idf_component.yml');
+  // The same byte rule as for sdkconfig.defaults: the scans below split lines and strip comments their
+  // own way, so a byte that another YAML reader treats as a line end or as whitespace is refused.
+  const manifestByte = manifestYaml === undefined ? undefined : unreadableByte(manifestYaml);
+  check('CK-MANIFEST-BYTES', 'reject', manifestByte === undefined,
+    'main/idf_component.yml holds only printable ASCII, tab, LF and CRLF.',
+    manifestByte === undefined ? '' : `main/idf_component.yml line ${manifestByte.line} holds ${manifestByte.detail}; only printable ASCII, tab, LF and CRLF are read.`);
   const kodeDeps = parseDependencies(manifestYaml ?? '').filter(dep => dep.name.startsWith('kodediy/'));
   const sdkGits: readonly string[] = [SDK_DEPENDENCY.templateGit, SDK_DEPENDENCY.catalogueGit];
   const wellFormed = kodeDeps.length > 0 && kodeDeps.every(dep =>
@@ -832,3 +940,4 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
   outcome.verdict = outcome.rejectsFailed === 0 ? 'pass' : 'fail';
   return outcome;
 }
+

@@ -107,6 +107,11 @@ describe('B. sdkconfig.defaults is read as Kconfig reads it', () => {
     ['G1-1 an inline comment after CONFIG_ESP_HOSTED_ENABLED=y (radio is off)', ['CONFIG_ESP_HOSTED_ENABLED=y # on'], 'B7'],
     ['G1-1 an inline comment after a partition table that is not the board package\'s', ['CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="mine.csv" # mine'], 'B3'],
     ['G1-1 a tab then an inline comment after the OS role', ['CONFIG_KODEOS_BOOT_ROLE_OS=y\t# os'], 'B4'],
+    // G2-1: these three were controls that passed in round two. The grammar now refuses an inline comment
+    // after a value and a lone CR, so they are refused, under the grammar rule.
+    ['G1-1 HOME_HOLD=y with an inline comment (was a control)', ['CONFIG_KODEOS_HOME_HOLD=y # keep'], 'CK-DEFAULTS-GRAMMAR'],
+    ['G1-1 the stock partition table with an inline comment (was a control)', ['CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="managed_components/kodediy__kbsp/partitions.csv" # stock'], 'CK-DEFAULTS-GRAMMAR'],
+    ['G1-1 a lone CR before a harmless assignment (was a control)', ['# note\rCONFIG_KLOG_MAXIMUM_LEVEL_WARN=y'], 'CK-DEFAULTS-GRAMMAR'],
   ];
   for (const [label, lines, rule] of refusals) {
     it(`${rule} fails on ${label}`, async () => {
@@ -154,9 +159,6 @@ describe('B. sdkconfig.defaults is read as Kconfig reads it', () => {
     ['the OS role set to n', ['CONFIG_KODEOS_BOOT_ROLE_OS=n']],
     ['a comment that is not an unset line', ['# CONFIG_KLOG_MAXIMUM_LEVEL_WARN=y', '# CONFIG_KODEOS_HOME_HOLD=n']],
     ['the app role repeated as y', ['CONFIG_KODEOS_BOOT_ROLE_APP=y']],
-    ['G1-1 HOME_HOLD=y with an inline comment', ['CONFIG_KODEOS_HOME_HOLD=y # keep']],
-    ['G1-1 the stock partition table with an inline comment', ['CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="managed_components/kodediy__kbsp/partitions.csv" # stock']],
-    ['G1-1 a lone CR before a harmless assignment', ['# note\rCONFIG_KLOG_MAXIMUM_LEVEL_WARN=y']],
     ['G1-1 a # inside a quoted string is not a comment', ['CONFIG_KODEOS_APP_NAME="a # b"']],
   ];
   for (const [label, lines] of controls) {

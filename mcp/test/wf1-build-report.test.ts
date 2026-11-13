@@ -29,11 +29,11 @@ const failedIds = (inspection: Awaited<ReturnType<typeof inspectWith>>) => inspe
 
 // ---- A. the resolved configuration ----
 
-test('both settings true in the resolved configuration: install-compatible, 11 checks, none fail', async () => {
+test('both settings true in the resolved configuration: install-compatible, 13 checks, none fail', async () => {
   const inspection = await inspectWith({});
   assert.equal(inspection.stage, 'kodeos_install_compatible');
   assert.deepEqual(failedIds(inspection), []);
-  assert.equal(inspection.checks.length, 11);
+  assert.equal(inspection.checks.length, 13);
 });
 
 for (const [key, option, id] of [['KODEOS_HOME_HOLD', 'homeHold', 'app.home_hold'], ['KQP_AO_WATCH', 'aoWatch', 'app.ao_watchdog']] as const) {

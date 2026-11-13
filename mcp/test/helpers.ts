@@ -96,11 +96,28 @@ export function buildOutputs(
     homeHold?: boolean | string | null;
     /** KQP_AO_WATCH in the resolved configuration: true by default, `null` leaves the key out. */
     aoWatch?: boolean | string | null;
+    /** PARTITION_TABLE_CUSTOM_FILENAME in the resolved configuration: the board package's table by default, `null` leaves the key out. */
+    partitionTable?: string | null;
+    /** PARTITION_TABLE_FILENAME in the resolved configuration (the table the build uses): as above. */
+    partitionTableUsed?: string | null;
+    /** PARTITION_TABLE_CUSTOM: true by default, `null` leaves the key out. */
+    partitionTableCustom?: boolean | string | null;
+    /** KODEOS_RADIO, ESP_HOSTED_ENABLED and BT_ENABLED in the resolved configuration: all false (the stock radio-off app) by default, `null` leaves a key out. */
+    radio?: boolean | string | null;
+    hosted?: boolean | string | null;
+    bluetooth?: boolean | string | null;
   } = {},
 ): Record<string, string | Buffer> {
   const sdkconfig: Record<string, unknown> = { IDF_TARGET: 'esp32p4', KODEOS_BOOT_ROLE_APP: options.appRole ?? true };
   if (options.homeHold !== null) sdkconfig.KODEOS_HOME_HOLD = options.homeHold ?? true;
   if (options.aoWatch !== null) sdkconfig.KQP_AO_WATCH = options.aoWatch ?? true;
+  const boardTable = 'managed_components/kodediy__kbsp/partitions.csv';
+  if (options.partitionTable !== null) sdkconfig.PARTITION_TABLE_CUSTOM_FILENAME = options.partitionTable ?? boardTable;
+  if (options.partitionTableUsed !== null) sdkconfig.PARTITION_TABLE_FILENAME = options.partitionTableUsed ?? boardTable;
+  if (options.partitionTableCustom !== null) sdkconfig.PARTITION_TABLE_CUSTOM = options.partitionTableCustom ?? true;
+  if (options.radio !== null) sdkconfig.KODEOS_RADIO = options.radio ?? false;
+  if (options.hosted !== null) sdkconfig.ESP_HOSTED_ENABLED = options.hosted ?? false;
+  if (options.bluetooth !== null) sdkconfig.BT_ENABLED = options.bluetooth ?? false;
   return {
     [`build/${name}.bin`]: image,
     'build/config/sdkconfig.json': JSON.stringify(sdkconfig),
@@ -126,7 +143,8 @@ export function standInTemplate(): { files: Record<string, string | Buffer>; man
     // Like the official manifest, this one explains override_path in a comment:
     // a rule that rejects the word anywhere in the file would reject the real template.
     'main/idf_component.yml': '## Sibling components are declared with override_path upstream; an app never sets it.\ndependencies:\n  kodediy/kode:\n    git: https://github.com/kodediy/kode-sdk.git\n    path: components/kode\n    version: v0.1.0\n',
-    'sdkconfig.defaults': 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="managed_components/kodediy__kbsp/partitions.csv"\nCONFIG_KODEOS_BOOT_ROLE_APP=y\n',
+    // Like the official file: the radio is off and said so out loud, with esp-hosted and Bluetooth.
+    'sdkconfig.defaults': 'CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="managed_components/kodediy__kbsp/partitions.csv"\nCONFIG_KODEOS_BOOT_ROLE_APP=y\nCONFIG_KODEOS_RADIO=n\nCONFIG_ESP_HOSTED_ENABLED=n\nCONFIG_BT_ENABLED=n\n',
     'ram_budget.txt': '# check with build/my_app.elf\nstatic_max 364000\n',
     'appdata/app.json': '{"kode": "1", "color": "#028AC2", "description": "An empty app to start from."}',
     'appdata/icon.png': Buffer.from([137, 80, 78, 71, 1, 2, 3]),

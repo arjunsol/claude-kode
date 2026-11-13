@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { KodeRefusal } from '../result.js';
 import {
-  CATALOGUE_IMAGE_MAX, CATEGORIES, CHIP_IDS, IMAGE, MAILBOX, MANIFEST_LIMITS, PARTITIONS, REQUIRED_CHIP,
+  CATALOGUE_IMAGE_MAX, CATEGORIES, CHIP_IDS, IMAGE, MAILBOX, MANIFEST_LIMITS, PARTITION_TABLE_SETTING, PARTITIONS, REQUIRED_CHIP,
 } from '../registry/sdk-contract.js';
 import { isSupportedIdf } from '../registry/policy.js';
 import type { BuildDigests, BuildReceipts } from './receipts.js';
@@ -191,6 +191,23 @@ export async function inspectImageWithDigests(config: HostConfig, projectName: u
   };
   const homeHoldOk = resolvedTrue('KODEOS_HOME_HOLD', 'holding BOT returns to kodeOS', 'app.home_hold');
   const aoWatchOk = resolvedTrue('KQP_AO_WATCH', 'the Active Object watchdog is on', 'app.ao_watchdog');
+  // B3 and B7 in the resolved configuration, so that a wrong static reading of sdkconfig.defaults
+  // cannot reach kodeos_install_compatible. The keys are those of a real resolved configuration.
+  const resolved = (key: string): unknown => (sdkconfig ? sdkconfig[key] : undefined);
+  const resolvedSeen = (key: string): string => {
+    const value = resolved(key);
+    return !sdkconfig ? 'is unknown because build/config/sdkconfig.json is missing or unreadable'
+      : value === undefined ? 'is absent'
+        : typeof value === 'boolean' ? `is ${value}` : typeof value === 'string' ? `is "${clip(value)}"` : 'is not a boolean or a string';
+  };
+  const partitionOk = check('app.partition_table',
+    resolved('PARTITION_TABLE_CUSTOM') === true && resolved('PARTITION_TABLE_CUSTOM_FILENAME') === PARTITION_TABLE_SETTING &&
+      resolved('PARTITION_TABLE_FILENAME') === PARTITION_TABLE_SETTING,
+    `In the resolved configuration PARTITION_TABLE_CUSTOM ${resolvedSeen('PARTITION_TABLE_CUSTOM')}, PARTITION_TABLE_CUSTOM_FILENAME ${resolvedSeen('PARTITION_TABLE_CUSTOM_FILENAME')} and PARTITION_TABLE_FILENAME ${resolvedSeen('PARTITION_TABLE_FILENAME')}; they must be true and "${PARTITION_TABLE_SETTING}", the board package's table.`);
+  const radio = resolved('KODEOS_RADIO');
+  const radioOk = check('app.radio',
+    radio === true || (radio === false && resolved('ESP_HOSTED_ENABLED') === false && resolved('BT_ENABLED') === false),
+    `In the resolved configuration KODEOS_RADIO ${resolvedSeen('KODEOS_RADIO')}, ESP_HOSTED_ENABLED ${resolvedSeen('ESP_HOSTED_ENABLED')} and BT_ENABLED ${resolvedSeen('BT_ENABLED')}; with the radio off, esp-hosted and Bluetooth must be false too, and the radio setting must be a boolean.`);
 
   const flasherBytes = await readInside(dir, 'build/flasher_args.json', 256 * 1024);
   const flasher = parseJson(flasherBytes?.toString('utf8'));
@@ -215,7 +232,7 @@ export async function inspectImageWithDigests(config: HostConfig, projectName: u
   // mailbox cannot hold is not installable by the route this inspection judges.
   const sizeOk = check('app.size', fitsCatalogue && bytes.length <= APPS_REGION && (!mailboxOnly || fitsMailbox),
     `The image is ${bytes.length} bytes. Catalogue limit ${CATALOGUE_IMAGE_MAX}; mailbox limit ${MAILBOX.imageMax}${fitsMailbox ? '' : ' (too large for the mailbox route the flash plan uses)'}.`);
-  const kodeosInstallCompatible = compiledImage && idfOk && manifestOk && roleOk && targetOk && homeHoldOk && aoWatchOk && flashOk && sizeOk;
+  const kodeosInstallCompatible = compiledImage && idfOk && manifestOk && roleOk && targetOk && homeHoldOk && aoWatchOk && partitionOk && radioOk && flashOk && sizeOk;
 
   const inspection: ImageInspection = {
     projectName: name,
