@@ -1,57 +1,80 @@
-# Production workflow and evidence
+# Production P4/C5 workflow — tagged manufacturer SDK v0.1.0
 
-## Claim record
+Use this together with the `kode-dot-dev` skill and the manufacturer's
+[v0.1.0 application template](https://github.com/kodediy/kode-app-template/tree/v0.1.0).
 
-For each consequential claim, record: claim ID, exact statement, primary source
-URL and revision/hash, retrieval date, board/module revision, processor,
-bootloader/kodeOS version, evidence class, conflicts and retest trigger.
+## Before development
 
-Keep these distinctions:
+- Confirm the requested target is a **production P4/C5** Kode Dot, not the
+  archived S3 prototype; record model, source tag, kodeOS/SDK revision, installed
+  firmware, connected module and evidence class. Record unknowns explicitly.
+- Use **ESP-IDF v6.1**, `IDF_TARGET esp32p4`, and the released `kode-sdk v0.1.0`
+  dependency. The repository's prior environment script pinned IDF 6.0.1;
+  that older installation is not evidence for the new official SDK.
+- Pull board facts from `components/kbsp/sdkconfig.board`,
+  `components/kbsp/partitions.csv`, and `kbsp/exp/include/kbsp_exp.h`.
+- Do not assume every app uses radio, LVGL, or every SDK component. Use the
+  official template's defaults and component dependencies.
 
-- Advertised: a manufacturer product claim.
-- Documented: a scoped specification or supported procedure.
-- Source-verified: the identified source actually implements the claimed behavior.
-- Physically observed: an identified production device demonstrated it under
-  recorded conditions; record artefact hashes and the test procedure.
-- Unknown, conflicting or stale: unresolved evidence; not permission to proceed.
+## Official app steps
 
-Do not promote all claims in a profile because one peripheral was tested.
-Invalidate affected evidence after board, module, firmware or loader changes.
-Manual module selection does not prove identity or electrical compatibility.
+1. Scaffold from `kodediy/kode-app-template` at a verified tag in the **user's
+   target app repository**. Check licence before distributing generated code.
+2. Make the app's `project(<name>)` 1–31 lowercase letters/digits/underscores;
+   set a meaningful `PROJECT_VER` and `KODE_APP_MANIFEST("Name", "category")`.
+3. Place custom behaviour in an app-owned Active Object with QP/C events.
+   **Never block an AO**. Use its `kode_worker` for blocking operations and
+   handle only the matching completion sequence. Worker jobs must not call
+   flash/NVS routines while executing from PSRAM.
+4. Prefer `kode.h` for ordinary tasks; `kode_sys.h` for event-driven/AO calls.
+   Have one owner for every hardware peripheral and request it via messages.
+5. Build with `idf.py build` in a correctly configured **v6.1** environment.
+   Capture `dependencies.lock`, image checksum, SDK tag and build log.
+6. Run the [catalogue's RULES.md](https://github.com/kodediy/kode-apps/blob/main/RULES.md)
+   checks where available. A catalogue check passing is **not** physical proof.
 
-## Examples
+## Deployment is not part of the initial MCP slice
 
-**“What pins does the production Camera module use?”**
-Read CK-R001 and look for a revision-specific production pin map. An S3 camera
-page is historical evidence only. Report missing production information rather
-than copying that pin table.
+The manufacturer exposes `kcli.py` with console operations, app installation and
+screen capture. The **MCP currently exposes only a fixed read-only subset**.
+Do not expose a passthrough `cmd`, `install`, `flash`, `erase` or user-configurable
+console verb: it would bypass Q04/Q10 permission gates.
 
-**“Build a P4 sample.”**
-Identify an official sample, supported ESP-IDF revision and dependency licences.
-Build locally without invoking device tools. Record source/dependency versions
-and output hashes. A generic chip sample is not a production-board or kodeOS
-qualification result. If a production sample is unavailable, report the blocker.
+The source's app-role CMake hook redirects `idf.py flash` to the partition named
+`app_pending` and has an explicit image size check. However, the v0.1.0 app
+README's manual `esptool` location (`0x1C00000`) does **not** match the SDK
+partition's mailbox start (`0x1A00000`). Do not use the raw command or
+hard-coded offsets. Capture and check generated flasher arguments before any
+approved device-writing workflow. App images larger than the mailbox limit
+need a different documented install route.
 
-**“Install this binary on my Dot.”**
-Check device identity, image processor/type/hash, loader compatibility, specific
-approval and recovery evidence. Refuse the installation workflow when a required
-contract is unknown; continue source inspection if useful. Do not fall back to
-the historical S3 command or replace kodeOS.
+Opening a USB serial connection can reset kodeOS. **Operator opt-in and
+explicit COM port are required** for even read-only MCP observations. The MCP
+checks SHA-256 of both official `kcli.py` and `kpayload.py` before invoking the
+script and does not automatically retry failed operations. Screenshots use a
+private temporary file that is removed after returning the image.
 
-## Current boundaries
+## External module coverage
 
-ADR-0004 and ADR-0009 are accepted architectural decisions. Their implementation
-and qualification remain outstanding. The old platform/core setup only supports
-historical S3 research and is not production readiness evidence. CK-R001 tracks
-the production evidence gap. Native ESP-IDF and TypeScript MCP are the agreed
-working direction, but their detailed ADRs remain proposed. A read-only simulated MCP prototype exists
-under `mcp/`; production services and hardware policy remain unimplemented.
+- Maker: J3 pin and I²C/SPI/UART examples form the base SDK foundation.
+- Robotics/Camera/Mesh/F*CK: vendor catalogue names separate module SDKs;
+  their source/production integration and electronic limits remain to verify.
+- ESP32-C5 firmware: source is Apache-2.0, but production Secure Boot accepts
+  Kode-signed images; do not attempt a custom C5 firmware flash.
+- All five require independently evidenced L4 physical module tests for v1.
 
-## Newly located manufacturer integration
+## Evidence record
 
-Consult `${CLAUDE_PLUGIN_ROOT}/docs/research/manufacturer-repositories.md` for the
-Arduino P4 board/descriptor/mailbox implementation and archived components.
-Source inspection establishes an integration candidate, not a verified deployment
-route. Keep mailbox layout and pin/sensor claims revision-specific; master and the
-6 MB feature branch differ. Preserve the distinction between that Arduino path
-and native ESP-IDF packaging.
+For every consequential claim: `claim`, `upstream repo + tag + file`, `source
+retrieval date`, `board/module/firmware revision`, `evidence level`, `test
+procedure`, `artefact SHA`, `conflicts`, `invalidated-by` and `next gate`.
+Manufacturer **source evidence** does not become hardware evidence by inference.
+
+## Licensing
+
+The plugin and original TypeScript MCP code are MIT; kodeOS and kode-sdk and
+firmware derived from the official app template are GPL-3.0-or-later. The SDK
+incorporates third-party QP/C (GPL/commercial) and RFAL (ST SLA0051) with
+special additional permissions and notices. The manufacturer's Python console
+client is GPL-licensed and is **executed externally**, not copied into this
+MIT project. Review redistribution and commercial use separately.

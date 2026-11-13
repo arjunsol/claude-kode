@@ -1,9 +1,14 @@
 # Firmware build environment and emulation
 
+> **Current production dependency (13 November 2026):** the manufacturer's public `kode-sdk v0.1.0` and app template require **ESP-IDF v6.1**, release commit `fff9895c82d744c7237be8847347bdd1b07c6643`. The installer script has been updated to this version. **No v6.1 clean build or device execution has been performed here.** Use the [official SDK integration guide](production-sdk-readonly-mcp.md) and the tagged manufacturer application template; do not use an S3 build or generic P4 hello-world build as evidence of a kodeOS-compatible app.
+
+The following details describe the **historical 6.0.1 experiment on 4 November**, retained for provenance only. Its activation commands and pin are no longer current.
+
+
 Updated 2026-11-04. Status: native compiler installed; full ESP-IDF Python setup
 blocked by network policy. No full firmware build or emulator run has passed.
 
-## Required update
+## Historical v6.0.1 experiment (superseded for production)
 
 Node 24 and the locked MCP dependencies support the current host tests. Firmware
 work additionally needs the sample's ESP-IDF **6.0.1**, matching RISC-V tools,

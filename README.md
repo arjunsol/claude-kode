@@ -1,75 +1,82 @@
 # claude-kode
 
-A Claude Code plugin for evidence-led development of kodeOS apps on the
-production [Kode Dot](https://kode.diy), targeting ESP32-P4/ESP32-C5.
-Personal-first, with public-ready engineering as the goal.
+A Claude Code plugin and TypeScript MCP development layer for the **production
+ESP32-P4 / ESP32-C5 Kode Dot**. Personal-first, with public-ready engineering
+and hardware evidence as the goal.
 
-## Current capabilities
+## Source-backed production foundation
 
-The plugin provides production research and compatibility guidance. It does not
-currently ship a verified production app template, loader integration or device deployment tool. An experimental
-[read-only MCP prototype](mcp/README.md) exists for simulated capability lookup;
-it is not auto-registered with the plugin. Production SDK, pin maps, application format and
-recovery evidence are tracked in [CK-R001](docs/research/ck-r001-production-contract-audit.md).
+Kode released the first public source versions of
+[kodeOS](https://github.com/kodediy/KodeOS/releases/tag/v0.1.0),
+[kode-sdk](https://github.com/kodediy/kode-sdk/releases/tag/v0.1.0),
+[kode-app-template](https://github.com/kodediy/kode-app-template/releases/tag/v0.1.0)
+and [C5 firmware](https://github.com/kodediy/kode_slave_c5/releases/tag/v0.1.0)
+on 9–10 November 2026. These provide the manufacturer app manifest,
+whole-firmware kodeOS app lifecycle, source-defined P4/C5 board profile and
+serial-console protocol. **Source availability is not hardware verification.**
 
-- `skills/kode-dot-dev/` guides source research and distinguishes build evidence
-  from production hardware validation.
-- `/claude-kode:new-kode-app` checks production scaffolding prerequisites. It
-  reports missing evidence rather than copying an incompatible S3 template.
-- `archive/esp32-s3/` preserves the unreleased prototype template and historical
-  notes. Its flash command has been removed; the recipe rejects device targets.
+- `skills/kode-dot-dev/` teaches native **ESP-IDF v6.1**, the official GPL SDK,
+  QP/C Active Objects, embedded `KODE_APP_MANIFEST` and evidence limits.
+- `/claude-kode:new-kode-app` guides generation from the **official tagged
+  Kode app template**, not the unreleased historical S3 template.
+- `mcp/` is a TypeScript stdio MCP service with the simulated capability probe
+  and **four opt-in console observations**: ping, boot state, installed apps and
+  a non-persistent screenshot. No installation, flashing, arbitrary CLI commands,
+  radio transmit or motor control is available through MCP.
+- `.mcp.json` registers the local server for Claude Code **after** you have run
+  `npm ci && npm run build` in `mcp/`; runtime starts safely with device reads
+  **disabled** until explicitly opted in.
+- `archive/esp32-s3/` contains research for an **unreleased prototype**.
+  Never flash it or use its pin numbers on a production Kode Dot.
 
-**Do not apply archived S3 pins, partition offsets or binaries to a production
-P4/C5 Dot.** Historical PlatformIO setup is not production readiness evidence.
+## First steps
 
-## Local plugin use
+1. Install Node 24 and build the local MCP (host-only setup is supported by the
+   [installation guide](docs/SETUP.md)):
 
-With Claude Code installed, start a session with this checkout as a plugin:
+   ```sh
+   cd mcp
+   npm ci
+   npm run build
+   npm test
+   ```
 
-```sh
-claude --plugin-dir /absolute/path/to/claude-kode
-```
+2. Launch Claude Code with this checkout as a plugin:
 
-Ask “check Kode Dot compatibility” or invoke `/claude-kode:new-kode-app MyApp`.
-No device is needed for research. Actual Claude Code activation and Windows
-compatibility still require interactive validation; see the
-[plugin development notes](docs/development/plugin-authoring.md).
+   ```sh
+   claude --plugin-dir /absolute/path/to/claude-kode
+   ```
 
-## Install development tools
+3. The `inspect_capability` fixture is usable without hardware. To use
+   console tools, explicitly configure a pinned official kodeOS v0.1.0 tools
+   checkout and a known Windows COM port; follow [mcp/README.md](mcp/README.md).
+   **Opening serial can reset the Dot.** No auto-discovery or silent connection.
+4. For actual firmware work, use ESP-IDF **v6.1** and the official vendor
+   template. The old installer pinned 6.0.1; this branch updates its target to
+   v6.1 but no clean build or physical integration has been verified here.
 
-With Python 3.10+ and Git installed, double-click `install.cmd` on Windows or
-`install.command` on macOS. On Linux, run `bash install.sh`. The shared installer
-sets up Node, locked dependencies and pinned firmware tools without contacting
-a device. Use `--host-only` to skip firmware setup.
+## Release boundaries and project memory
 
-See [the environment setup guide](docs/SETUP.md) for prerequisites, platform
-launchers, activation, retries and current validation limits.
+The [working decisions](docs/discovery/working-decisions.md) require an
+end-to-end development agent, versioned evidence profiles, supervised physical
+operations, a Windows-first host, and hardware qualification of **all five
+expansion modules** before calling the project v1.
 
-## Development checks
+The original ADR-0002's closed-source/no-manifest claim is obsolete for the
+production P4, and [a source audit and proposed ADR-0017](https://github.com/arjunsol/claude-kode/pull/3)
+record that change. The PR is separate; accepted ADRs remain unchanged until
+explicit review.
 
-With Python 3.10 or newer:
+A first useful **read-only** MCP service is not an end-to-end flashing agent,
+not a module driver and not device-qualified. The Camera, Mesh, F*CK and Robotics
+module SDKs named by the vendor catalogue were not publicly accessible during
+the 11 November source audit. Do not claim v1 completeness.
 
-```sh
-python3 -m unittest discover -s tests -v
-```
+## Licence
 
-These checks cover the archive guard and installer integrity/error handling. They
-do not build firmware or establish a host/device permission boundary.
-
-For native firmware setup and emulator coverage, see the
-[firmware environment guide](docs/development/firmware-environment.md). ESP-IDF
-setup is partially installed; its Python dependencies remain network-blocked.
-
-## Decisions and next work
-
-[ADR-0004 and ADR-0009](docs/adr/README.md) accept versioned hardware profiles and
-kodeOS-first integration. Implementation and physical qualification remain open.
-See the [task list](docs/development/task-list.md) for dependencies and progress.
-The other proposed ADRs remain proposals. No v1 or production compatibility claim
-is made by this scaffold.
-
-## Licensing
-
-MIT — see [LICENSE](LICENSE). Preserve ADR-0001's restriction against vendoring
-unlicensed manufacturer examples. Verify component licences before reuse; public
-source access alone is not permission to copy code.
+Original Claude Kode plugin/TypeScript tooling is **MIT**. Apps generated from
+the manufacturer's `kode-app-template` and linked to the GPL SDK have separate
+**GPL-3.0-or-later** obligations (including third-party QP/C/RFAL notices and
+potential special permissions). Do not copy the manufacturer's GPL Python
+console scripts into this MIT repository. The MCP invokes a separately checked,
+operator-pinned official checkout.

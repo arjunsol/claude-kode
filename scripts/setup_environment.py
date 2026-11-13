@@ -18,7 +18,7 @@ import urllib.request
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-IDF_COMMIT = '8c19b156084a0753687347cca1f5355782893533'
+IDF_COMMIT = 'fff9895c82d744c7237be8847347bdd1b07c6643'
 NODE_VERSION = '24.22.1'
 
 
@@ -166,12 +166,12 @@ def setup_host(state: Path, env: dict) -> Path:
 def setup_firmware(toolchains: Path, env: dict) -> Path:
     if not shutil.which('git', path=env.get('PATH')):
         raise SetupError('Git is required for firmware setup. Install Git, reopen the terminal and retry; see docs/SETUP.md.')
-    source = toolchains / 'esp-idf-v6.0.1'
-    tools = toolchains / 'esp-idf-tools-v6.0.1'
+    source = toolchains / 'esp-idf-v6.1'
+    tools = toolchains / 'esp-idf-tools-v6.1'
     toolchains.mkdir(parents=True, exist_ok=True)
     env['IDF_TOOLS_PATH'] = str(tools)
     if not source.exists():
-        run(['git', 'clone', '--depth', '1', '--branch', 'v6.0.1', '--recursive',
+        run(['git', 'clone', '--depth', '1', '--branch', 'v6.1', '--recursive',
              '--shallow-submodules', 'https://github.com/espressif/esp-idf.git', source], env=env)
     actual = run(['git', '-C', source, 'rev-parse', 'HEAD'], env=env, capture=True)
     if actual != IDF_COMMIT:
@@ -203,7 +203,7 @@ def write_activation(state: Path, node: Path | None, source: Path | None, toolch
         ps.append(f'$env:PATH = {ps_quote(str(node.parent))} + [IO.Path]::PathSeparator + $env:PATH')
         cmd.append('set "PATH=' + str(node.parent).replace('%', '%%') + ';%PATH%"')
     if source:
-        tools = str(toolchains / 'esp-idf-tools-v6.0.1')
+        tools = str(toolchains / 'esp-idf-tools-v6.1')
         sh += [f'export IDF_TOOLS_PATH={shlex.quote(tools)}', f'. {shlex.quote(str(source / "export.sh"))}']
         ps += [f'$env:IDF_TOOLS_PATH = {ps_quote(tools)}', f'. {ps_quote(str(source / "export.ps1"))}']
         cmd += ['set "IDF_TOOLS_PATH=' + tools.replace('%', '%%') + '"',

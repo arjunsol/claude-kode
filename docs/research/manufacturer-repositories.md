@@ -1,5 +1,8 @@
 # Manufacturer repository inventory
 
+> **Evidence update (13 November 2026):** This was a 4 November snapshot, **not a current inventory**. Kode publicly released kodeOS, kode-sdk, kode-app-template and kode_slave_c5 on 9–10 November. The current preferred production references are the tagged v0.1.0 sources and [production integration guide](../development/production-sdk-readonly-mcp.md); see also [audit PR #3](https://github.com/arjunsol/claude-kode/pull/3). Historical S3/Arduino findings below must not override the new SDK or its P4 partition table.
+
+
 Audited 2026-11-04. Scope: public repositories visible at
 [the kodediy organisation listing](https://github.com/orgs/kodediy/repositories?type=all).
 Its embedded page metadata reported **12 repositories, one page**; page 2 and

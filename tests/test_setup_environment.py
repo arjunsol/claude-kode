@@ -75,7 +75,7 @@ class SetupTests(unittest.TestCase):
 
     def test_existing_wrong_sdk_is_not_reset(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); (root / 'esp-idf-v6.0.1').mkdir()
+            root = Path(tmp); (root / 'esp-idf-v6.1').mkdir()
             with patch.object(setup.shutil, 'which', return_value='git'), \
                  patch.object(setup, 'run', return_value='wrong-head') as run:
                 with self.assertRaisesRegex(setup.SetupError, 'refusing to reset'):

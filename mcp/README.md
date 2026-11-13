@@ -1,11 +1,12 @@
-# Read-only MCP feasibility slice
+# Claude Kode MCP — first read-only device slice
 
-Experimental implementation of the TypeScript/stdin-stdout direction in proposed
-ADR-0007. This does not ratify that ADR or implement hardware authorisation.
+A locally launched TypeScript MCP stdio server, building on the original
+`inspect_capability` simulation fixture. **This is not a flashing, motor-control,
+RF-transmission, remote device or arbitrary console-command server.**
 
-## Reproduce
+## Build and test
 
-Node 24.x (validated: 24.22.1) and npm (validated: 11.9.0):
+Run on Node **24.x** with the repository's locked dependencies:
 
 ```sh
 cd mcp
@@ -14,49 +15,83 @@ npm run build
 npm test
 ```
 
-Dependency versions are exact and the npm lockfile includes integrity hashes.
-SDK 1.32.2 declares Node >=18; Node 24 is the deliberately narrow prototype
-runtime selection, not a release support matrix. TypeScript 7.0.2, Zod 4.6.7,
-tsx 4.23.15 and @types/node 24.19.2 are pinned for this experiment.
+The plugin root `.mcp.json` declares the built `mcp/dist/server.js` using
+`${CLAUDE_PLUGIN_ROOT}`. Run the build before enabling the plugin; start Claude
+Code with `claude --plugin-dir /absolute/path/to/claude-kode` and inspect
+`/mcp`. Direct execution is `node mcp/dist/server.js`. stdout is **only** MCP
+JSON-RPC; no HTTP listener or cloud service is created.
 
-Start directly with `node dist/server.js` after building. It communicates using
-MCP over stdin/stdout; do not expect a human prompt or a network listener. Logs
-must go to stderr. Use `node` directly for MCP configuration, rather than
-`npm start`, whose banner would contaminate protocol stdout.
+## Tools
 
-This prototype is not auto-registered with the plugin. For manual client testing,
-a stdio server configuration uses `command: "node"` and an `args` array containing
-the absolute path to `mcp/dist/server.js`. Build before starting it. Packaged
-plugin registration, installation lifecycle and Windows distribution remain open.
+| Name | Behaviour | Default |
+| --- | --- | --- |
+| `inspect_capability` | Existing simulated P4/C5 fixture only | Available |
+| `kode_ping` | Run official `kcli.py -p COMx ping` | Blocked |
+| `kode_boot_info` | Run fixed `cmd boot_info` and return observations | Blocked |
+| `kode_list_apps` | Run fixed `cmd app_list` and return observations | Blocked |
+| `kode_capture_screen` | Capture PNG through the official console and return MCP image; delete temporary file | Blocked |
 
-## Tool contract
+No tool accepts caller-supplied device commands, file paths, serial ports,
+Python executables or write/flash options. Host process execution uses
+`execFile` with an argv array and **no shell**, limited output/timeout and no
+automatic retry. No device discovery is attempted.
 
-`inspect_capability({ profileId, capability })` is the only tool. Both fields
-are nonempty strings of at most 100 characters; additional fields are rejected.
-It returns a runtime-validated result with a status, reason, simulation evidence
-class and `hardwareAuthorized: false`.
+**Caution:** Opening the official USB serial connection can **reset the Dot**.
+Although the chosen console verbs are informational, serial attachment is not
+perfectly side-effect-free; MCP tool annotations deliberately do not claim
+`readOnlyHint=true` for hardware calls. Device identity is **not yet fully
+validated** by these observations.
 
-- `simulated-p4-c5` / `local_build`: simulated lookup only; no build is executed.
-- Unknown profile: `not_verified` / `UNKNOWN_PROFILE`.
-- `kodeos_install` or `standalone_flash` on the fixture: `refused` /
-  `SIMULATION_CANNOT_AUTHORIZE_HARDWARE`.
-- Unknown capability on the fixture: `unsupported` / `UNKNOWN_CAPABILITY`.
+## Operator opt-in (Windows, example PowerShell)
 
-The fixture is not a production profile. Caller-provided approvals/evidence cannot
-upgrade it. No filesystem, subprocess, serial, network or device operation is
-available through the tool. This limited API is not an OS sandbox: arbitrary
-shell access remains outside its scope.
+1. Obtain a checked-out, trusted **v0.1.0** of
+   [kodediy/KodeOS](https://github.com/kodediy/KodeOS/releases/tag/v0.1.0).
+   Do not use the moving `develop` branch. Install Python/pyserial in a trusted
+   environment (ESP-IDF provides Python). Leave the manufacturer files outside
+   this MIT repository.
+2. In the terminal from which Claude Code is launched, set the official tools
+   directory, its two **operator-pinned SHA-256** values and explicit COM port:
 
-## Validation evidence and limits
+```powershell
+$env:KODE_TOOLS_DIR = (Resolve-Path 'C:\src\KodeOS\tools').Path
+$env:KODE_CLI_SHA256 = (Get-FileHash "$env:KODE_TOOLS_DIR\kcli.py" -Algorithm SHA256).Hash
+$env:KODE_PAYLOAD_SHA256 = (Get-FileHash "$env:KODE_TOOLS_DIR\kpayload.py" -Algorithm SHA256).Hash
+$env:KODE_PORT = 'COM7'                 # replace with the connected Dot's port
+$env:KODE_PYTHON = 'python'            # or full path to a trusted venv's python.exe
+$env:KODE_ENABLE_CONSOLE_READS = '1'   # explicit opt-in: serial can reset the Dot
+```
 
-Six tests exercise the pure lookup and an independent SDK client against a real
-compiled stdio child process, including malformed requests, absent write tools
-and shutdown. The cloud's restricted shell sandbox caused Node child processes
-to exit without running tests/server code; full test execution used the supported
-sandbox escalation and confirmed **six individual tests**, not a zero-test or
-file-only result. No assertion was weakened to accommodate that restriction.
+SHA values are **local operator pins**, not a cryptographic attestation of
+upstream provenance. First verify the checkout/tag independently; the two pins
+then prevent silently running changed local scripts. Because `kcli.py` imports
+other Python dependencies, this is **not a complete subprocess sandbox**.
 
-Windows, interactive Claude Code discovery and real hardware remain untested.
-No SDK, loader or production capability claim follows from these tests. Keep
-CK-R001 open. The next policy spike should add claim provenance, invalidation and
-explicit production-profile schemas only after the relevant policy review.
+Re-launch Claude Code from that terminal. For ordinary use or after testing,
+set `KODE_ENABLE_CONSOLE_READS=0`. The server always refuses device operations
+if the opt-in is absent, port is not `COM1`–`COM256`, either SHA is wrong,
+its script is missing, or the operation is not allowlisted.
+
+The console output or screenshot may contain serial numbers, screen contents
+or other personal information. These are returned to the requesting MCP client
+without telemetry; screenshots are held in a random temporary directory only
+while the command executes, then removed. Avoid forwarding captured results to
+third-party services unless you intend to.
+
+## Evidence and boundaries
+
+- Source: [official KodeOS tools/kcli.py v0.1.0](https://github.com/kodediy/KodeOS/blob/v0.1.0/tools/kcli.py)
+  and [kpayload.py v0.1.0](https://github.com/kodediy/KodeOS/blob/v0.1.0/tools/kpayload.py).
+- Build and console APIs are documented in official source, **not verified here
+  on a production Dot**. Hardware testing must still demonstrate actual port,
+  firmware identity, command output, screenshots and the post-reset state.
+- Production firmware installation is a separate future feature. App-role
+  `idf.py flash` is redirected by the official SDK, but no MCP write/flash
+  endpoint exists, and raw `esptool` offsets are deliberately disallowed.
+- The host-policy layer is only one safety boundary; external shell tools
+  available to Claude Code are outside this MCP's enforcement.
+- Currently pinned MCP SDK v1.32.2 in the earlier scaffold, with exact npm lock.
+  The newer MCP TypeScript SDK v2 can be evaluated in a separate versioned
+  migration rather than silently changing the package contract mid-PR.
+
+Run `npm test` for injected fake-console tests and an independent MCP client
+protocol test. These test **host control flow**, not actual device behaviour.

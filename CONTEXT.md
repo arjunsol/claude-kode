@@ -1,28 +1,48 @@
-# claude-kode
+# claude-kode — domain vocabulary
 
-A Claude Code plugin, plus firmware tooling, for developing kodeOS apps on the production Kode Dot (ESP32-P4/ESP32-C5). Personal-use tool for now, not a public-audience product.
+A Claude Code plugin and TypeScript MCP for production **ESP32-P4 / ESP32-C5**
+Kode Dot development. Personal-first, public-ready. Q01–Q12 are the product
+requirements; only explicitly accepted ADRs are architecturally binding.
 
-## Language
+**Kode Dot:** The shipping ESP32-P4/C5 device. The ESP32-S3 was an unreleased
+prototype, preserved only under `archive/esp32-s3/`.
 
-**Kode Dot**:
-The production ESP32-P4/ESP32-C5 device selected by ADR-0004. Board/module revisions and production pin maps require scoped evidence. The old ESP32-S3 configuration is an unreleased prototype, archived under `archive/esp32-s3/`.
+**kodeOS:** Public-source GPL-licensed firmware providing the UI, console,
+application installer, OS OTA and bootloader integration. An installed app is
+**another complete firmware**; it does not run inside kodeOS as a dynamically
+loaded library. kodeOS and app start on separate boots.
 
-**kodeOS**:
-The device's application runtime/launcher. Production loader format, ABI, packaging and recovery are under investigation in CK-R001. ADR-0009 selects a kodeOS-first workflow; acceptance does not verify that interface.
-_Avoid_: treating generic firmware and an installable kodeOS app as interchangeable.
+**App:** A P4 ESP-IDF firmware image compatible with kodeOS's app/boot contract.
+Contains an ESP-IDF project name/version and can embed a `KODE_APP_MANIFEST`
+(display name and categories). Separate `appdata` assets carry the icon,
+colour and description. A generic P4 build does not by itself prove device
+installation safety.
 
-**App**:
-An application accepted by a verified, compatible kodeOS loader. A generic build artefact is not an installable app until an evidenced packaging/validation contract establishes that. Historical S3 `app_name` only sets a binary filename.
+**Category:** One or more catalogue categories declared in the embedded
+`KODE_APP_MANIFEST` for the production P4. Not merely an S3-era microSD folder.
 
-**Category**:
-A category folder described in historical S3-era docs. Whether the production loader uses that same organisation remains unverified. ADR-0002's findings remain historical and are not silently superseded or extended to P4.
+**Template:** A copyable starting app project. The supported production source
+is `kodediy/kode-app-template` at a verified release tag. Its generated code
+links to the GPL kode SDK; it is **not MIT firmware**. The archived S3 files are
+not production templates.
 
-**Template**:
-A copyable starting project with a verified target. No production template is currently shipped; `archive/esp32-s3/app` is historical build-only material. `/new-kode-app` scaffolds a new app from a template into wherever the user is working - not necessarily inside claude-kode itself.
-_Avoid_: example (see below - a template is what you copy *from*, an example is what results when *we* copy it for our own dogfooding).
+**Example:** A sample application used for local dogfooding/validation,
+distinct from the general template and from another user's app repository.
 
-**Example**:
-A demo app maintained inside this repo, under `examples/`, built using this plugin's own templates so the plugin can be dogfooded against real (if personal) use. Distinct from a user's own app, which lives in whatever repo they ran `/new-kode-app` in.
+**SDK:** The GPL-3.0-or-later `kodediy/kode-sdk` (`v0.1.0` baseline). It exposes
+`kode.h` blocking APIs for tasks and `kode_sys.h` event-based facilities for
+Active Objects, owns peripherals through QP/C and supplies canonical P4 board
+settings from `kbsp`. The SDK embeds third-party QP/C and RFAL with separate
+licensing/notice requirements.
 
-**Driver component**:
-One of kodediy's individually Apache-2.0-licensed GitHub repos (e.g. `esp_lcd_co5300`, `kode_lsm6dsox`), pulled into a template via `lib_deps`. Distinct from kodediy's *example*-repo bundled BSP code (`kodedot_bsp` inside `kodedot_examples`/`kodedot_SharedExamples`), which carries no LICENSE and is never vendored into this repo.
+**Firmware roles:** `kodeOS` system firmware, kodeOS-installed user **app**,
+C5 radio firmware and isolated standalone firmware are distinct artefact and
+permission classes. The MCP does not expose any firmware-changing action yet.
+
+**Console observation:** An allowed query through KodeOS's pinned GPL
+`kcli.py` script over an operator-selected serial port. It may reset the Dot
+when the port opens. Source-described commands are not device verification.
+
+**Module:** Maker, Robotics, Camera, Mesh or F*CK. All five are owner-required
+v1 hardware qualification gates. Never assume a specialised module is
+supported simply because the base SDK has a similarly named peripheral.
