@@ -5,12 +5,18 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { resultSchema } from '../src/capabilities.js';
 
-test('independent client negotiates stdio, discovers tools, validates calls and closes the process',
+test('independent MCP client sees simulation and disabled read-only console tools',
   { timeout: 15_000 }, async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [fileURLToPath(new URL('../dist/server.js', import.meta.url))],
       stderr: 'pipe',
+      // No test may discover or touch attached hardware through inherited configuration.
+      env: {
+        PATH: process.env.PATH ?? '',
+        SystemRoot: process.env.SystemRoot ?? '',
+        KODE_ENABLE_CONSOLE_READS: '0',
+      },
     });
     let stderr = '';
     transport.stderr?.on('data', chunk => { stderr += chunk.toString(); });
@@ -19,8 +25,18 @@ test('independent client negotiates stdio, discovers tools, validates calls and 
       await client.connect(transport);
       assert.equal(client.getServerVersion()?.name, 'claude-kode-feasibility');
       const { tools } = await client.listTools();
-      assert.deepEqual(tools.map(t => t.name), ['inspect_capability']);
+      assert.deepEqual(tools.map(t => t.name), [
+        'inspect_capability', 'kode_ping', 'kode_boot_info',
+        'kode_list_apps', 'kode_capture_screen',
+      ]);
       assert.equal(tools[0]?.annotations?.readOnlyHint, true);
+      for (const tool of tools.slice(1)) {
+        // Serial attachment can reset the board, so host tool hints must not over-promise.
+        assert.equal(tool.annotations?.readOnlyHint, false);
+        const result = await client.callTool({ name: tool.name, arguments: {} });
+        assert.equal(result.isError, true);
+        assert.match(String(result.content?.[0]?.type === 'text' ? result.content[0].text : ''), /NOT_ENABLED/);
+      }
       for (const [capability, expected] of [['local_build', 'simulated'],
         ['kodeos_install', 'refused'], ['standalone_flash', 'refused']]) {
         const response = await client.callTool({ name: 'inspect_capability',
@@ -36,8 +52,10 @@ test('independent client negotiates stdio, discovers tools, validates calls and 
         const result = await client.callTool({ name: 'inspect_capability', arguments: args });
         assert.equal(result.isError, true);
       }
-      const absent = await client.callTool({ name: 'flash_device', arguments: {} });
-      assert.equal(absent.isError, true);
+      for (const name of ['flash_device', 'kode_run_command', 'kode_install_app', 'kode_transmit']) {
+        const absent = await client.callTool({ name, arguments: {} });
+        assert.equal(absent.isError, true);
+      }
     } catch (error) {
       throw new Error(`MCP child stderr: ${stderr}`, { cause: error });
     } finally {

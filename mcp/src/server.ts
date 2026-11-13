@@ -1,11 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { inspectCapability, requestSchema, resultSchema } from './capabilities.js';
+import { registerReadOnlyKodeTools } from './readonly-tools.js';
 
-const server = new McpServer({ name: 'claude-kode-feasibility', version: '0.0.0' });
+const server = new McpServer({ name: 'claude-kode-feasibility', version: '0.1.0' });
 server.registerTool('inspect_capability', {
   title: 'Inspect a simulated capability',
-  description: 'Read-only test-fixture lookup. Does not detect devices, execute builds, or authorize hardware.',
+  description: 'Read-only test-fixture lookup. Does not detect devices, execute builds, or authorise hardware.',
   inputSchema: requestSchema,
   outputSchema: resultSchema,
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -17,5 +18,7 @@ server.registerTool('inspect_capability', {
   };
 });
 
-// stdout belongs exclusively to the MCP protocol. No network listener or device API.
+registerReadOnlyKodeTools(server);
+
+// stdout belongs exclusively to MCP JSON-RPC. Never print logs here.
 await server.connect(new StdioServerTransport());
