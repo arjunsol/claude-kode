@@ -110,7 +110,10 @@ build logic is the pinned template's, because `idf.py build` executes the
 project's CMake and would import a project `idf_ext.py`. `kode_validate`
 reports it separately from the verdict as `buildLogic` (rule ids `BL-...`), and
 a project that fails it is refused with `BUILD_LOGIC_NOT_PINNED`. Source files,
-`sdkconfig.defaults`, `appdata/` and the `SRCS` list stay the author's to edit.
+`sdkconfig.defaults`, `appdata/` and the `SRCS` list stay the author's to edit, but
+`sdkconfig.defaults` is accepted only as empty lines, `#` comments, exact `CONFIG_NAME=value`
+lines and exact `# CONFIG_NAME is not set` lines in printable ASCII; any other line refuses the
+whole project (`BL-DEFAULTS-GRAMMAR`).
 It also refuses CMake preset files (`CMakePresets.json`, `CMakeUserPresets.json`),
 `sdkconfig.rename` files and any file whose name starts with `Kconfig`; the
 `Kconfig*` rule is a precaution rather than a demonstrated exploit. It narrows what a build runs; a build is still not a

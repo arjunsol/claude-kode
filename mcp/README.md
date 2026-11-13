@@ -18,15 +18,15 @@ npm run build
 npm test
 ```
 
-`npm test` runs without a device, without ESP-IDF and without network access. It runs 269
-tests: 267 pass, 0 fail and 2 are skipped, with and without the template variable below
-(last run on Windows, Node 24.22.1). One test scaffolds from a real `kode-app-template`
+`npm test` runs without a device, without ESP-IDF and without network access. It runs 422
+tests: 419 pass, 0 fail and 3 are skipped without the template variable below, and 420 pass,
+0 fail and 2 are skipped with it (last run on Windows, Node 24.22.1). One test scaffolds from a real `kode-app-template`
 v0.1.0 checkout and is skipped unless you set `KODE_TEST_TEMPLATE_DIR` to that checkout
 (an absolute path); with the variable set, the test that checks the refusal without a
 template is skipped instead. One test inspects a real build directory and is skipped unless
 you set `KODE_TEST_REAL_BUILD_DIR` to the `build/` directory of a project (named `rb_app`)
-that a real ESP-IDF v6.1 build produced; one run with both variables set gave 268 pass and
-1 skipped.
+that a real ESP-IDF v6.1 build produced. A run of an earlier state of this code with both
+variables set gave 407 pass and 1 skipped out of 408; it was not repeated on the final code.
 
 The plugin root `.mcp.json` declares the built `mcp/dist/server.js` using
 `${CLAUDE_PLUGIN_ROOT}`. Run the build before enabling the plugin, start Claude Code with
@@ -202,11 +202,37 @@ v6.1 reads, have not been altered or added to.
   run a shell command, whether ESP-IDF's variant does could not be checked here, and the
   official template has no such file. It is not a demonstrated exploit.
 
-The static rules read `sdkconfig.defaults` as a list of every assignment, in order. Both
-`CONFIG_X=n` and `# CONFIG_X is not set` count as n, and the rules for the app role, hold-BOT
-and the watchdog judge every assignment, not only the last. This is a model of how Kconfig
-reads the file, and it is incomplete (see finding G2-1 in the design record), which is why
-inspection also checks the resolved configuration.
+The static rules read `sdkconfig.defaults` only if every line is one of these forms, and
+refuse the whole file otherwise:
+
+- an empty line;
+- a comment starting `#`, except the `# default:` pragma, the `# Deprecated options ...` and
+  `# End of deprecated options` markers, and an "is not set" line that is not exactly the
+  form below;
+- `CONFIG_NAME=value`, with `NAME` of A-Z, 0-9 and `_`, no space around `=`, no inline
+  comment, and a value that is `y`, `n`, a decimal number, a `0x` hex number or a
+  double-quoted string of printable ASCII with no backslash and no inner quote;
+- exactly `# CONFIG_NAME is not set`.
+
+The file may hold only printable ASCII, tab, LF and CRLF; a lone CR, other control bytes,
+DEL, a byte order mark and any non-ASCII byte are refused, in comments too. The same byte
+rule applies to `main/idf_component.yml` and to a root `sdkconfig`. For the settings the
+rules read (app role, OS role, hold-BOT, watchdog, radio, esp-hosted, Bluetooth) the value
+must be `y` or `n`, and the partition table must be a quoted string. A refusal reads
+`sdkconfig.defaults line N cannot be read with certainty: <reason>` followed by the accepted
+forms; `kode_validate` reports it as `BL-DEFAULTS-GRAMMAR` (not eligible to build) and
+`CK-DEFAULTS-GRAMMAR` (verdict fail), and the rules for the app role, hold-BOT, watchdog,
+partition table and radio fail with it. Trailing spaces and whitespace-only lines are refused
+too; the message names the line. Within a readable file, `CONFIG_X=n` and
+`# CONFIG_X is not set` both count as n, the app role, hold-BOT and watchdog rules judge every
+assignment, and the partition table and radio rules use the last. The partition table rule
+also refuses any other `CONFIG_PARTITION_TABLE_*` setting, and the radio rule applies unless
+the last radio line is `CONFIG_KODEOS_RADIO=y` (deleting the radio lines therefore needs
+`CONFIG_ESP_HOSTED_ENABLED=n` and `CONFIG_BT_ENABLED=n`). On the accepted forms the validator
+agreed with kconfgen 3.14.0 in every comparison run (see the design record). Kconfig
+meaning that no rule names can still change a protected value, which is why inspection also
+checks the resolved configuration. `SDKCONFIG_DEFAULTS` set in the operator's environment
+is outside these rules.
 
 Still the app author's to edit: source files, `sdkconfig.defaults`, `appdata/` and the
 `SRCS` list in `main/CMakeLists.txt`. `kode_validate` reports the gate as `buildLogic`
@@ -293,7 +319,7 @@ captured results to third-party services unless you intend to.
 Evidence is kept in four artefact stages and a four-level test scale. The stages
 `kode_inspect_image` keeps apart are: a source project; a compiled image; an image
 compatible with kodeOS installation (a source-level judgement that now also needs
-`KODEOS_HOME_HOLD` and `KQP_AO_WATCH` to be true in the resolved configuration, 11 checks in
+`KODEOS_HOME_HOLD` and `KQP_AO_WATCH` to be true in the resolved configuration, 13 checks in
 all); and a device-verified
 image, which is never claimed and always reads `NOT TESTED`. The test levels are L1
 (build), L2 (simulation), L3 (device) and L4 (module integration). No L1 to L4 test record
@@ -302,14 +328,18 @@ and that is not recorded in the registry.
 
 What remains unverified:
 
-- A real `idf.py build` of the code in this branch as it now stands. One real build passed
+- A real `idf.py build` of the code in this branch as it now stands. An attempt on the
+  final code was BLOCKED (cut short, no failure found). One real build passed
   on commit 46271fa (through `kode_build`, ESP-IDF v6.1.0 at `fff9895c`, template v0.1.0
   built against SDK v0.1.1, 321 s, image 517680 bytes) and is described in the design
   record. The fixes after that commit have been checked against that build directory by
   one test; they have not been used to run a new build.
 - Running a preset-file attack through a real `idf.py`: the refusal is tested, and the
   reading of idf.py comes from its v6.1 source.
-- The Kconfig reader is only modelled. See the design record for the open finding G2-1.
+- Kconfig meaning behind accepted lines. Two gates found no disagreement with kconfgen on the
+  accepted forms, but two low, fail-safe findings stay open in the design record: deleting the
+  template's three radio lines is refused, and `CONFIG_APP_NO_BLOBS=y` passes validation and
+  then fails the radio check after the build.
 - Anything on a physical Dot, including what board revision a retail unit reports. The SDK
   declares `KBSP_BOARD_REV "DVT"`, the only revision the profile knows.
 - All five modules. Electrical data, detection and qualification are `unknown` for each,

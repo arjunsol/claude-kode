@@ -169,7 +169,20 @@ treat the answer as the limit of what you can claim.
    rewrite the root `CMakeLists.txt` or `main/idf_component.yml`. What is yours
    to edit: source files, `sdkconfig.defaults`, `appdata/`, and the `SRCS` list
    in `main/CMakeLists.txt`, which must stay a single plain
-   `idf_component_register(...)` call. If the app genuinely needs more build
+   `idf_component_register(...)` call.
+   `sdkconfig.defaults` is read strictly. Only these lines are accepted:
+   an empty line; a `#` comment (not `# default:` or a deprecated-options
+   marker); exactly `CONFIG_NAME=value` with no space around `=`, no inline
+   comment and a value of `y`, `n`, a number or a quoted string of printable
+   ASCII with no backslash; and exactly `# CONFIG_NAME is not set`. Only
+   printable ASCII, tab, LF and CRLF are allowed. The app role, OS role,
+   hold-BOT, watchdog, radio, esp-hosted and Bluetooth settings take only `y`
+   or `n`. Any other line makes the whole project ineligible and the verdict
+   fail, with `BL-DEFAULTS-GRAMMAR` and `CK-DEFAULTS-GRAMMAR` and a message
+   `sdkconfig.defaults line N cannot be read with certainty`. Do not set any
+   other `CONFIG_PARTITION_TABLE_*` symbol. To turn the radio on, set
+   `CONFIG_KODEOS_RADIO=y`; deleting the three radio lines is refused unless
+   esp-hosted and Bluetooth are set to `n`. If the app genuinely needs more build
    logic, say that `kode_build` cannot build it and stop; do not route around
    the gate. The gate also refuses any file whose name starts with `Kconfig`
    (any letter case), so do not add one; that is a precaution, not a
@@ -252,7 +265,8 @@ Evidence is graded L1 build verified, L2 simulation verified, L3 device
 verified on a production Dot, and L4 integration verified with real expansion
 modules. A build through `kode_build` is at most L1. One real build has passed
 (commit 46271fa, ESP-IDF v6.1.0, v0.1.0 template against SDK v0.1.1); it is
-described in the design record and is not a registry record, because the record
+described in the design record and is not a registry record (a build of the later code was
+attempted and is BLOCKED, so that code has not been built for real), because the record
 shape cannot describe a host build. No L1, L2, L3 or L4 record exists, so no claim in the registry is
 `device_verified` or `integration_verified`. Report outcomes as PASS, FAIL, BLOCKED or NOT TESTED,
 with the evidence behind each: a command that was not run is NOT TESTED, not

@@ -31,7 +31,12 @@ For `$ARGUMENTS`:
    `CMakePresets.json`, `CMakeUserPresets.json`, `sdkconfig.rename` or
    `Kconfig*` files, and do not alter the root `CMakeLists.txt` or
    `main/idf_component.yml`. Source files, `sdkconfig.defaults`, `appdata/` and
-   the `SRCS` list in `main/CMakeLists.txt` are yours to edit.
+   the `SRCS` list in `main/CMakeLists.txt` are yours to edit, but
+   `sdkconfig.defaults` is read strictly: only empty lines, `#` comments, exact
+   `CONFIG_NAME=value` lines (no space around `=`, no inline comment) and exact
+   `# CONFIG_NAME is not set` lines in printable ASCII. A line of any other form
+   makes the project ineligible (`BL-DEFAULTS-GRAMMAR`, naming the line). To turn
+   the radio on set `CONFIG_KODEOS_RADIO=y`; do not just delete the radio lines.
 4. Call `kode_validate`. If the verdict fails, report the failed rules and fix
    the source before going on. Also read `buildLogic.eligible`: a project can
    pass the verdict and still be one `kode_build` will refuse.

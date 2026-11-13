@@ -72,7 +72,16 @@ assessed previous release and any other release is refused.
    last a precaution, not a demonstrated exploit), and do not alter the root
    `CMakeLists.txt` or `main/idf_component.yml`. Source files,
    `sdkconfig.defaults`, `appdata/` and the `SRCS` list in `main/CMakeLists.txt`
-   are yours to edit. A pre-existing `managed_components/` or
+   are yours to edit. `sdkconfig.defaults` is read strictly: only empty lines,
+   `#` comments, exact `CONFIG_NAME=value` lines (no space around `=`, no inline
+   comment, value `y`, `n`, a number or a plain quoted string), exact
+   `# CONFIG_NAME is not set` lines, printable ASCII, tab, LF and CRLF. The
+   app role, OS role, hold-BOT, watchdog, radio, esp-hosted and Bluetooth
+   settings take only `y` or `n`, and no other `CONFIG_PARTITION_TABLE_*`
+   symbol may be set. Any other line refuses the whole project
+   (`BL-DEFAULTS-GRAMMAR`, `CK-DEFAULTS-GRAMMAR`, naming the line). To turn the
+   radio on set `CONFIG_KODEOS_RADIO=y`; deleting the three radio lines is
+   refused unless esp-hosted and Bluetooth are set to `n`. A pre-existing `managed_components/` or
    `dependencies.lock` cannot be verified (`BL-UNVERIFIABLE`, a warning that
    `kode_build` repeats in its result). If the build runs past its deadline,
    the build process and what is still attached to it are ended (or the message

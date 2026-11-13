@@ -1,8 +1,8 @@
 # F1: capability registry, evidence and build-only pipeline
 
 **Status:** Implemented in a proposed PR (stacked on PR #4); tested on a Windows host with
-no device; one real ESP-IDF v6.1 build passed on commit 46271fa and has not been repeated on
-the code after it; **NOT TESTED** on a physical Dot. Date: 13 November 2026.
+no device; one real ESP-IDF v6.1 build passed on commit 46271fa; a build of the later code was
+attempted and is BLOCKED (cut short, no failure found), so that code has not been built for real; **NOT TESTED** on a physical Dot. Date: 13 November 2026.
 Tracking issue: [CK-R003](https://github.com/arjunsol/claude-kode/issues/7). The
 specification it implements in part is the PR #6 proposal.
 
@@ -239,14 +239,17 @@ rule ids begin `BL-`) requires:
   other project-directory inputs idf.py reads in v6.1 (`idf_ext.py`, `CMakeLists.txt`,
   `dependencies.lock`) were found already modelled;
 - no links at the top level or in `main/` and `appdata/` (`BL-LINK`);
-- a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target
-  (`BL-SDKCONFIG`).
+- `sdkconfig.defaults` holds only lines of the accepted grammar, with no byte outside
+  printable ASCII, tab, LF and CRLF (`BL-DEFAULTS-GRAMMAR`; the grammar is described with the
+  static rules below);
+- a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target, with the same
+  byte rule (`BL-SDKCONFIG`).
 
 In practice `kode_build` builds projects made by `kode_new_app` whose build-logic files and
 other modelled build inputs have not been altered or added to. That is a claim about the
 inputs listed above; the review of the second fix round showed that the list was incomplete
-once (the preset files), and finding G2-1 below shows that the `sdkconfig.defaults` rules
-are not a complete model of Kconfig. Source files, `sdkconfig.defaults`, `appdata/` and the `SRCS` list remain the
+once (the preset files), and finding G2-1 below showed that the `sdkconfig.defaults` rules
+were not a complete model of Kconfig. Round three replaced the model with a closed grammar. Source files, `sdkconfig.defaults`, `appdata/` and the `SRCS` list remain the
 app author's to edit. A pre-existing `managed_components/` or `dependencies.lock` cannot be
 verified by the server and is reported as a warning (`BL-UNVERIFIABLE`) that does not make
 the project ineligible. The gate narrows what a build runs; it does not make the build a
@@ -314,11 +317,37 @@ After a restart every image is unattested until it is built again.
   literal. Files outside `main/` are not scanned. Trigraph splices are not joined. It is a
   source heuristic: token pasting or a prebuilt library defeats it, and it is not a
   substitute for checking the built ELF.
-- The `sdkconfig.defaults` rules (app role B4, hold-BOT D8, watchdog C2-WATCH, B3, B7) read
-  every assignment in order. `# CONFIG_X is not set` counts as `n`, a lone CR is a line break,
-  an inline `#` comment is stripped from the value, and B4, D8 and C2-WATCH judge every
-  assignment rather than the last. B3 and B7 use the last value. This is a model of the
-  Kconfig reader and is incomplete (G2-1, below).
+- The `sdkconfig.defaults` rules (app role B4, hold-BOT D8, watchdog C2-WATCH, B3, B7) no
+  longer imitate the Kconfig reader (finding G2-1). They read only lines of a small grammar,
+  and a file with any other line is refused whole: the project is not eligible to build
+  (`BL-DEFAULTS-GRAMMAR`, naming the line number and the accepted forms), the verdict fails
+  (`CK-DEFAULTS-GRAMMAR`), and B3, B4, B7, D8 and C2-WATCH fail with it. The accepted lines
+  are: an empty line; a comment starting `#` (but not the `# default:` pragma, the
+  `# Deprecated options for backward compatibility` and `# End of deprecated options`
+  markers, or an "is not set" line that is not exactly the accepted one); exactly
+  `CONFIG_NAME=value`, with no space around `=`, `NAME` of A-Z, 0-9 and `_`, and a value
+  that is `y`, `n`, a decimal, a `0x` hex number or a double-quoted string of printable ASCII
+  with no backslash and no inner quote; and exactly `# CONFIG_NAME is not set`. For the
+  symbols the rules read, the type is enforced too: the app role, OS role, hold-BOT,
+  watchdog, radio, esp-hosted and Bluetooth settings take only `y` or `n`, and the partition
+  table only a quoted string, because Kconfig ignores a value of the wrong type and keeps
+  the earlier one. Whole-file byte rule: only printable ASCII, tab, LF and CRLF are read, so
+  a lone CR, 0x1C to 0x1F, DEL, NEL, U+2028, a byte order mark and anything not ASCII are
+  refused wherever they sit, comments included. The same byte rule applies to
+  `main/idf_component.yml` (`CK-MANIFEST-BYTES`) and to a root `sdkconfig` (`BL-SDKCONFIG`,
+  which also refuses the deprecated-options markers and the `# default:` pragma). On the
+  accepted grammar the validator and kconfgen 3.14.0 agree on every value; that was run, not
+  argued (see "G2-1 proof" below). B4, D8 and C2-WATCH judge every assignment, B3 and B7 use
+  the last. Two narrowing rules cover Kconfig meaning that the grammar cannot see (finding
+  N-1): B3 also fails when any `CONFIG_PARTITION_TABLE_*` symbol other than
+  `PARTITION_TABLE_CUSTOM_FILENAME` is assigned in any form (another member of the
+  partition-table choice selects a different table), and B7 applies unless the last radio
+  line is `CONFIG_KODEOS_RADIO=y`, so a deleted radio line counts as off and then needs
+  `ESP_HOSTED_ENABLED=n` and `BT_ENABLED=n`. This does not read Kconfig defaults. A refused
+  file looks like this: `sdkconfig.defaults line N cannot be read with certainty: <reason>`
+  followed by the list of accepted forms. Inspection also checks the resolved configuration for B3 and B7
+  (`app.partition_table`, `app.radio`), so a wrong static reading cannot reach
+  `kodeos_install_compatible`.
 - A parsed project text file over 64 KiB, or with a line over 4096 characters, is rejected
   (`CK-FILE-BOUND`) without being run through a regex. Values echoed from project files and
   from build metadata are capped at 64 characters, and `kode_inspect_image` reports at most
@@ -377,16 +406,19 @@ below and by one optional test.
 | Before changes: MCP tests | PASS, 14 of 14 |
 | Before changes: Python setup tests | PASS, 13 of 13 |
 | `npm run build` | PASS, clean |
-| `npm test`, no template checkout | PASS: 269 tests, 267 pass, 0 fail, 2 skipped (the real-template test and the real-build-directory test) |
-| `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 269 tests, 267 pass, 0 fail, 2 skipped, as reported by the final run; a real scaffold is created, pinned to SDK v0.1.1, passes validation, is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
-| `npm test` with the template and `KODE_TEST_REAL_BUILD_DIR` both set (run by the second gate) | PASS: 269 tests, 268 pass, 0 fail, 1 skipped (the no-template scaffold test); the real-build inspection test passes |
+| `npm test`, no template checkout | PASS: 422 tests, 419 pass, 0 fail, 3 skipped (the real-template test and the real-build-directory test are two; the third was not identified in this record) |
+| `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 422 tests, 420 pass, 0 fail, 2 skipped; a real scaffold is created, pinned to SDK v0.1.1, passes validation (including the new `sdkconfig.defaults` grammar), is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
+| `npm test` with the template and `KODE_TEST_REAL_BUILD_DIR` both set | PASS on the code of the fix-g2 package, before the last narrowing fix: 408 tests, 407 pass, 0 fail, 1 skipped; the real resolved `sdkconfig.json` of the earlier real build passes the two new inspection checks. NOT TESTED on the final code with both variables set |
 | Python setup tests (`python -m unittest discover -s tests -v`) | PASS: 13 tests, OK |
-| Real `kode_build` of a scaffolded app on ESP-IDF v6.1.0 | PASS, once, on commit 46271fa; see "Real ESP-IDF build" below. Not repeated on the code after that commit |
-| Final code at the end of this work | Built and tested as above. It has had no new real `idf.py` build |
+| Real `kode_build` of a scaffolded app on ESP-IDF v6.1.0 | PASS, once, on commit 46271fa; see "Real ESP-IDF build" below |
+| Real `kode_build` of the code in this commit | BLOCKED: the attempt was cut short, see "Real build of the final code" below |
 
-The tests added since commit 46271fa are in three new files, `wf1-gate.test.ts`,
-`wf1-build-report.test.ts` and `wf1-registry.test.ts`, plus a changed helper
-(`mcp/test/helpers.ts`).
+Node was v24.22.1 for every run above. The tests added since commit 46271fa are in six new
+files: `wf1-gate.test.ts`, `wf1-build-report.test.ts` and `wf1-registry.test.ts` (round one),
+and `wf2-defaults-grammar.test.ts`, `wf2-resolved.test.ts` and `wf2-kconfig-semantics.test.ts`
+(this round), plus a changed helper (`mcp/test/helpers.ts`). Three controls in
+`wf1-gate.test.ts` became refusals (an inline comment after a value, twice, and a lone CR),
+because the grammar refuses those shapes; no assertion was loosened.
 
 Guard-breaking check (safety guards broken one at a time, each expected to turn the suite
 red):
@@ -411,7 +443,25 @@ red):
   checked by SHA-256, and the working tree was identical before and after. The
   implementers also ran their new tests before their fixes and saw them fail (for example 25
   of 49 gate tests and 7 of 12 registry tests).
+- Fifth pass, on the round-three code (this round). The fix packages saw their new tests fail
+  before the grammar existed (11 tracked-type tests failed with "the project must not be
+  eligible to build") and ran 14 guard mutations of their own, each turning 1 to 81 tests red
+  (the two G2-2 guards: 2, 2 and 1 tests). Gate 1 broke 27 guards: 26 turned the suite red
+  and 1 stayed green (G-10, an inline comment accepted in the value; harmless, because the
+  type rule still refuses it on every tracked symbol and no rule reads untracked ones).
+  Gate 2 broke 32 guards: 31 turned the suite red, including all six guards of the B3 and B7
+  narrowing, and 1 stayed green (G-14, `!readable ||` in the B7 condition), an equivalent
+  mutant: for an unreadable file the radio is undefined, so B7 still applies. Every mutated
+  file was restored and checked by SHA-256, and `git diff HEAD` hashed the same at the start
+  and end of each gate.
 - After each pass every mutated file was confirmed restored.
+
+One note on evidence: the fix-g2 package did not run the four gate scripts (x1, n1, r2b,
+mutate-x3) before changing code, so the red evidence for the grammar comes from its own new
+tests run against a stub. Its first red run was for the wrong reason (unpinned fixtures) and
+was corrected; the first right-reason red it saved covers the tracked-type cases only. The
+other grammar tests were not seen red for the right reason before the grammar existed. The
+gates re-ran the four scripts afterwards and every earlier shape is refused.
 
 This check shows that each listed guard is covered by at least one test. It does not show
 that the list of guards is complete.
@@ -446,7 +496,7 @@ fixes in this round, through the MCP tools in order, with no device attached.
 - Inspection, on the code of that commit: source project true, compiled image true,
   kodeOS-install compatible true, device verified false (NOT TESTED), stage
   `kodeos_install_compatible`, chip esp32p4, flash plan `mailbox_only` at `0x1a00000` for
-  `rb_app.bin`, 9 of 9 checks pass. After the fixes the inspection has 11 checks; the
+  `rb_app.bin`, 9 of 9 checks pass. After the fixes the inspection has 13 checks (the resolved configuration is read for the app role, hold-BOT, watchdog, partition table and radio); the
   optional test `KODE_TEST_REAL_BUILD_DIR` runs the current code over this build directory
   and it is install-compatible with every check passing.
 - A second `kode_build` without cleaning was refused with `BUILD_STATE_PRESENT`, as
@@ -464,7 +514,32 @@ fixes in this round, through the MCP tools in order, with no device attached.
   from PowerShell.
 - Combinations still NOT TESTED: the v0.1.0 template pinned to SDK v0.1.0; building the same
   project twice to learn what differs between images; a direct `idf.py build` (not needed,
-  as the MCP build passed); a build of the fixed code.
+  as the MCP build passed); a build of the fixed code (attempted, see below).
+
+### Real build of the final code
+
+Result: **BLOCKED**. No image was built and no inspection was run.
+
+- Code the attempt used: commit c823f00 plus uncommitted changes (`git diff HEAD` hashed to
+  git object `c3a085d4e20fa3f91daa771a37e071f50efb586e`, covering 7 tracked files, plus three
+  untracked test files). Those uncommitted changes are the ones this commit records, as they
+  stood when the attempt began; the commit may differ from them if code changed after that,
+  which this record cannot show. The attempt therefore does not establish that a build of the
+  commit passes.
+- What ran: `kode_get_toolchain_status`, `kode_new_app` and `kode_validate` returned status OK
+  and reason code OK (0.171 s, 0.035 s, 0.02 s). `kode_build` was started and had not
+  finished when the attempt was stopped. It was stopped because the agent was told to give its
+  final answer while the five-to-eight-minute compile was still running. No failure was found.
+- NOT TESTED: `kode_inspect_image` on the new build (so the 13 inspection checks have not run
+  on a fresh real image), the second-build refusal on the new code, the negative check
+  (`neg.mjs`, written and never run), the real-build-directory test against a new build, and
+  whether the worktree was left clean by that attempt.
+- To repeat: `pwsh -File <scratchpad>/wf2/rebuild/run.ps1 main`, then `run.ps1 neg`, with
+  `KODE_TEST_REAL_BUILD_DIR=<scratchpad>/wf2/rebuild/ws/rb_app/build`.
+- The only real build that passed remains the one on 46271fa above. After it, the
+  `sdkconfig.defaults` grammar, the B3 and B7 narrowing and two inspection checks were added.
+  The real resolved `sdkconfig.json` of that earlier build passes the two new inspection
+  checks (a test), which is not a new build.
 
 ### Handover test requirements
 
@@ -491,9 +566,13 @@ Each row names the test file under `mcp/test/` and the test name.
 | Uniform refusals and cautions | `expiry.test.ts`: every scope gate refuses as a tool error, for every knowledge tool; a refused compatibility decision is a tool error with the first reason code and the full payload; an allowed console read says in its message that opening the port resets the Dot; the SDK contract serves release-scoped facts only for their release, and console digests for every kodeOS release; `policy.test.ts`: an allowed console read carries the cautions |
 | Test records scoped to their claim | `registry.test.ts`: a test record backs only the claim it was taken for: profile, board revision, module and date |
 | Build inputs idf.py reads that the gate must refuse | `wf1-gate.test.ts` section A: `CMakePresets.json`, `CMakeUserPresets.json` (any letter case, also under `main/`), `main/sdkconfig.rename` and `main/sdkconfig.rename.esp32p4` are refused with `BL-EXTRA-BUILD-FILE`, and 5 controls stay eligible |
-| `sdkconfig.defaults` read as Kconfig reads it | `wf1-gate.test.ts` section B: the unset form, every assignment (`=n` then `=y`), a lone CR line break, a CR-only file, an inline `#` comment and the stock project, against D8, C2-WATCH, B4, B3 and B7. Open: G2-1 (not covered) |
+| `sdkconfig.defaults` read as Kconfig reads it | `wf1-gate.test.ts` section B: the unset form, every assignment (`=n` then `=y`), a lone CR line break, a CR-only file, an inline `#` comment and the stock project, against D8, C2-WATCH, B4, B3 and B7. Three of these shapes (two inline comments, a lone CR) are now refusals by the grammar, not controls |
+| `sdkconfig.defaults` accepted only as a closed grammar (G2-1) | `wf2-defaults-grammar.test.ts`: the shapes X1 to X15, byte cases (lone CR, 0x1C to 0x1F, DEL, NEL, BOM, non-ASCII), the type rule for tracked symbols, the pragma and deprecated markers, "is not set" near misses, fail-closed B3, B4, B7, D8 and C2-WATCH, the same byte rule for `main/idf_component.yml` and a root `sdkconfig`, a stand-in project asserting build eligibility, and the pinned template's own file |
+| `idf_component.yml` scans split on a lone CR (G2-2) | `wf2-defaults-grammar.test.ts` section D (M2, M3: 2 tests each go red when the `override_path` scan or `parseDependencies` is reverted); `wf2-resolved.test.ts`: the `kode_get_evidence` not-found message (1 test goes red when reworded back) |
+| Inspection reads partition table and radio from the resolved configuration | `wf2-resolved.test.ts`: `app.partition_table` (CUSTOM true, both filename keys hold the board table) and `app.radio` (boolean; esp-hosted and Bluetooth false when off); a real build's `sdkconfig.json` passes both (`KODE_TEST_REAL_BUILD_DIR`) |
+| Kconfig meaning behind accepted lines (N-1) | `wf2-kconfig-semantics.test.ts`: `TWO_OTA`, `SINGLE_APP_LARGE`, `SINGLE_APP=n`, an unset-form member, `CUSTOM=y` and `OFFSET` fail B3; a deleted radio line with esp-hosted or Bluetooth not set to n fails B7; untouched projects stay eligible |
 | C12 splices and the include warning | `wf1-gate.test.ts` section C: backslash with spaces, tab, form feed, CRLF or a lone CR before the line break; a BOM; form feed and vertical tab around `#`; CR-only line endings; absolute, drive-letter, backslash, macro, `%:`, `??=`, `include_next`, `import` and spaced includes warn; four plain includes do not |
-| Inspection reads the resolved configuration | `wf1-build-report.test.ts`: `KODEOS_HOME_HOLD` and `KQP_AO_WATCH` true gives install-compatible with 11 checks; absent, false or the string "true" in `sdkconfig.json` fails `app.home_hold` or `app.ao_watchdog` (3 tests each); a missing `sdkconfig.json` fails both; a real build directory (`KODE_TEST_REAL_BUILD_DIR`) inspects as install-compatible |
+| Inspection reads the resolved configuration | `wf1-build-report.test.ts`: `KODEOS_HOME_HOLD` and `KQP_AO_WATCH` true gives install-compatible with 13 checks; absent, false or the string "true" in `sdkconfig.json` fails `app.home_hold` or `app.ao_watchdog` (3 tests each); a missing `sdkconfig.json` fails both; a real build directory (`KODE_TEST_REAL_BUILD_DIR`) inspects as install-compatible |
 | A finished build is not reported as a timeout | `wf1-build-report.test.ts`: exit 0 and exit 3 with the output held open are reported by exit code; a normal exit has no `outputHeldOpen`; a process that never exits is still a timeout with no exit code; `buildApp` carries the fact and the sentence for exit 0 and for `BUILD_FAILED` |
 | Registry scoping, dates and module claims | `wf1-registry.test.ts`: a scoped claim on an unknown revision is refused; a two-revision scope needs a record for each; a claim cannot be recorded before its observation; impossible dates are refused; a board claim or another module's claim under the maker module is refused; a future-recorded claim is not applicable and the detail says so; one day ahead is still applicable; the shipped registry loads and every shipped claim is applicable |
 | Unsupported module operations | `policy.test.ts`: module operations are refused: no SDK, no attachment proof, no L4 record; `protocol-f1.test.ts`: modules are catalogued, never detected, and unknown modules get no invented specification; `registry.test.ts`: module electrical data, detection and qualification are unknown for all five modules |
@@ -618,7 +697,7 @@ own (a name after a CR-only `//` comment was hidden); all have tests. After that
 **Gate 2** (on the final code; read it; 16 guard checks): F1, F3, F4, G1-2 and G1-3 closed;
 F2, F6 and G1-1 partly closed. New findings:
 
-- G2-1 (medium, open): lines that kconfgen reads differently from the validator still pass.
+- G2-1 (medium; open when gate 2 of round two reported it, closed in round three): lines that kconfgen reads differently from the validator still pass.
   Run with kconfgen 3.14.0: Python `strip()` removes control bytes 0x1C to 0x1F and U+0085;
   a bool value of `no` or empty reads as n; kconfgen ignores `CONFIG_X =v`,
   `#  CONFIG_X  is not set` (extra spaces), lines inside a deprecated-options block and an
@@ -629,15 +708,106 @@ F2, F6 and G1-1 partly closed. New findings:
   only; the resolved-configuration checks catch them after the build has run. The validator's
   own comment that "reading wider can only refuse more" is false for the last-value rules B3
   and B7. The gate's suggested fix is to refuse any line that is not a plain comment, blank,
-  or an exact assignment, or to add resolved-configuration checks for B3 and B7. Not done.
-- G2-2 (low): the changes that split `idf_component.yml` scans on every line break, and the
+  or an exact assignment, or to add resolved-configuration checks for B3 and B7. Both were done in round three.
+- G2-2 (low; closed in round three): the changes that split `idf_component.yml` scans on every line break, and the
   reworded not-found message in `kode_get_evidence`, are guarded by no test. Reverting them
   left the suite green. With the scan change reverted, a lone-CR `override_path` passes
-  rule B1 again, although `BL-SDK-PIN` still refuses the build. Not fixed.
+  rule B1 again, although `BL-SDK-PIN` still refuses the build. Tests were added in round three.
 
-State of the review items at the end of this work: closed F1, F3, F4, F5 (documentation),
-F7 (documentation), G1-2, G1-3. Open: F2 and G1-1 (both fall under G2-1), F6 part c, G2-1,
-G2-2. The last gate checked the final code, and this record was written after it.
+### Round three: G2-1 and G2-2
+
+Three rounds had each fixed the reported `sdkconfig.defaults` line shapes and left a
+neighbour, because the validator tried to imitate esp-idf-kconfig's reader. Round three stops
+imitating. The accepted grammar, the byte rule and the types enforced for the tracked symbols
+are described under the gate's list above. A file the validator cannot read with certainty
+makes the project not eligible (`BL-DEFAULTS-GRAMMAR`) and fails the verdict
+(`CK-DEFAULTS-GRAMMAR`), and the rules that read it fail closed.
+
+One bypass was found while proving the grammar and is closed by the type rule: a tracked bool
+given a number is ignored by kconfgen (it keeps the earlier value), but a reader that took the
+value at face value saw "not n". For example `CONFIG_KODEOS_RADIO=n`, then
+`CONFIG_KODEOS_RADIO=0`, with `CONFIG_ESP_HOSTED_ENABLED=y`: kconfgen has the radio off and
+esp-hosted on, and B7 would not have applied.
+
+**G2-1 proof.** `proof.mts` (kept with the round's scratch files, not in the repository) runs the real
+kconfgen 3.14.0 (ESP-IDF v6.1 tools, `python -I -m kconfgen`) on toy Kconfig files and compares
+what it resolves with what the validator reads: (1) every accepted value form of every type, in
+four file layouts (LF, CRLF, no final newline, comments and blank lines), 124 cases; (2) 600
+random files drawn from the grammar over the tracked symbols, checking that the validator's
+last value is kconfgen's value for each tracked bool and the partition table, and that whenever B3,
+B4, B7, D8 or C2-WATCH passes, kconfgen resolved what the rule demands, and that B7 is applied
+exactly when kconfgen has the radio off; (3) the pinned template's own `sdkconfig.defaults`, line
+by line; (4) a control: the seven shapes gate-2 found are refused, and the round-two reader
+disagreed with kconfgen on six of them, so the harness does see a disagreement. 5464 checks, all
+equal. Mutation checks of the guards: every one turned tests red.
+
+**G2-2.** `wf2-defaults-grammar.test.ts` section D reverts to red when the `override_path` scan or
+`parseDependencies` stops splitting on a lone CR, and `wf2-resolved.test.ts` when the
+`kode_get_evidence` message is reworded back.
+
+#### Gates of round three
+
+Two further gates read the code and ran it. Neither changed the worktree (`git diff HEAD`
+hashed the same before and after).
+
+**Gate 1** (the round-three code as first written). G2-1 closed, G2-2 closed. Harness
+`grammar.mts`: 87,498 whole-file cases in one real-template project, 26,718 accepted and each
+resolved by the real kconfgen 3.14.0 through its entry point on a toy Kconfig with the real
+tracked names and types, 279,409 comparisons, 0 disagreements. The cases were every accepted
+form in three layouts (730), then mechanical edges: each code point U+0000 to U+00FF and 22
+Unicode separators at every position class, raw bytes 0x80 to 0xFF, every one-character
+substitution and deletion, and 8 kinds of line break. No raw byte and no line-break variant
+was accepted. B3, B4, B7, D8 and C2-WATCH outcomes were not vacuous (for example B7: 22,286
+absent, 221 pass, 4,211 fail). The re-run gate scripts (x1, n1, r2b, r2-gate) refused every
+earlier shape, and `kode_build` of X1, X6 and X13 starts no process. Two new low findings:
+
+- N-1: Kconfig meaning, not reading. `CONFIG_PARTITION_TABLE_TWO_OTA=y` (or
+  `SINGLE_APP_LARGE`) passed B3 although kconfgen resolved a different table, and deleting
+  `CONFIG_KODEOS_RADIO=n` while setting `CONFIG_ESP_HOSTED_ENABLED=y` passed because B7 was not
+  applied. The build then started and only the resolved-configuration checks stopped it at
+  `compiled_image`.
+- N-2: this record and `mcp/README.md` still said 11 checks, or only three resolved settings.
+
+Both were fixed (see the first bullet of the residual risks for the narrowing, and the
+documents for the counts), and the gate scripts `route-choice.mts` and `route-radio.mts` went
+from `verdict=pass eligible=true` to `verdict=fail` with `kode_build` refused
+`VALIDATION_FAILED` and `processStarted=0`.
+
+**Gate 2** (the final code: grammar unchanged since gate 1, plus the B3 and B7 narrowing).
+G2-1 closed, G2-2 closed, N-1 closed, N-2 closed. Harness `grammar2.mts`: 118,655 cases, 37,555
+accepted, each resolved by the real kconfgen 3.14.0 twice, once on the toy Kconfig (reading)
+and once on the real kdefs, kaos, kqp, esp_hosted and ESP-IDF v6.1 partition-table Kconfig
+with the real board file loaded first (meaning, 343 symbols, including every real symbol in
+every value form). 0 reading disagreements in 609,692 comparisons. The legitimate edits of a
+scaffolded project pass and reach `kodeos_install_compatible`: untouched; added
+`CONFIG_FOO=y` and `CONFIG_BAR="text"`; the KLOG hint uncommented; the radio turned on; LF line
+ends; radio `y` with the esp-hosted and Bluetooth lines deleted; an added int and unset
+line. A trailing space after a value is refused, as the grammar intends. Two new low
+findings, both fail-safe, neither a bypass:
+
+- NEW-1: the template's own comment "To turn the network on, delete the three lines below"
+  now fails B7 (`verdict=fail`, `eligible=true`, `kode_build` refused with
+  `processStarted=0`), although kconfgen resolves a safe all-off state. The B7 message tells
+  the user to make `CONFIG_KODEOS_RADIO=y` the last radio line, which is accepted. The template
+  comment is upstream and GPL and is not edited here.
+- NEW-2: `CONFIG_APP_NO_BLOBS=y` passes statically. kconfgen then treats `BT_ENABLED` as
+  invisible and leaves it out of the resolved json, so `app.radio` (which needs
+  `BT_ENABLED === false`) fails after the build and the image stays at `compiled_image`,
+  although Bluetooth cannot be on. 21 of the gate's semantic comparisons came from this one
+  line. Whether a real `sdkconfig.json` omits `BT_ENABLED` is inferred from kconfgen's json
+  writer, not observed in a build.
+
+Not covered by either gate: environment inputs (`SDKCONFIG_DEFAULTS`), and a
+`sdkconfig.rename` file inside a managed component. Gate 2 found none in ESP-IDF v6.1 or the
+pinned components that maps a name onto a tracked symbol, and nothing there selects or
+implies `BT_ENABLED`, `ESP_HOSTED_ENABLED`, `KODEOS_RADIO` or a partition-table choice
+member (the one exception, `PARTITION_TABLE_MD5`, is read by no check).
+
+State of the review items at the end of this work: closed F1, F2 and G1-1 (both under G2-1),
+F3, F4, F5 (documentation), F7 (documentation), G1-2, G1-3, G2-1, G2-2, N-1, N-2. Open:
+F6 part c (owner decision), NEW-1 and NEW-2 (both low, fail-safe). The last gate read the
+final code; this record was written after it. The real build did not run on that code
+(BLOCKED, above).
 
 Deferred, with the reason:
 
@@ -672,24 +842,36 @@ Deferred, with the reason:
   second round found the list incomplete once. Other inputs may exist. Inputs driven by the
   operator's environment (`IDF_EXTRA_ACTIONS_PATH`, `SDKCONFIG_DEFAULTS`, `EXTRA_CFLAGS`,
   `IDF_EXTENSION_ALLOW_UNTRUSTED`) are outside what MCP can set and are not modelled.
-- **Open (G2-1, medium):** the `sdkconfig.defaults` rules are a model of Kconfig's reader,
-  not the reader. Inputs that kconfgen reads differently still bypass B3 (partition table)
-  and B7 (radio and hosted) completely, and bypass D8, C2-WATCH and B4 until a build has
-  run and inspection reads the resolved configuration. An image built from such a project
-  can still be reported install-compatible for B3 and B7.
-- **Open (G2-2, low):** two changes have no test (see above).
+- **Closed, gate-checked (G2-1, G2-2, N-1):** the `sdkconfig.defaults` rules no longer model
+  Kconfig's reader. A file with any line outside the grammar is refused whole, B3 and B7 are
+  also checked in the resolved configuration, and B3 and B7 are narrowed as described under
+  the static rules. Two independent gates found no reading disagreement with kconfgen 3.14.0
+  on the accepted grammar. The grammar does not cover environment-driven or SDK-supplied
+  inputs: a rename file shipped inside a managed component could map an old name onto a
+  tracked symbol (none exists in the pinned set), and `SDKCONFIG_DEFAULTS` comes from the
+  operator's environment.
+- **Open (NEW-1, low, fail-safe):** deleting the template's three radio lines, as its own
+  comment says to turn the network on, is refused by B7. Setting `CONFIG_KODEOS_RADIO=y` is
+  accepted. The cost of not reading Kconfig defaults.
+- **Open (NEW-2, low, fail-safe):** `CONFIG_APP_NO_BLOBS=y` passes statically, then `app.radio`
+  fails after the build because `BT_ENABLED` is absent from the resolved configuration. A
+  false refusal, not a bypass; inferred, not observed in a real build.
+- Kconfig meaning can still change a protected value through accepted lines that no static
+  rule names. Only the five resolved-configuration checks catch that, after the build has
+  run.
 - **Open (F6 part c):** an old test record still backs a physical claim until the owner sets
   a maximum age. The shipped registry has no physical records.
 - Rule C12 is a source heuristic. Token pasting, trigraph splices, a prebuilt library and
   includes the heuristic cannot see defeat it, and it is not a substitute for checking the
   built ELF. It was compared with clang, not GCC.
 - A build can still report a stage from files whose resolved configuration was checked for
-  only three settings (app role, hold-BOT, watchdog).
+  five settings (app role, hold-BOT, watchdog, partition table, radio trio), and not at all for settings outside those.
 - `build/flash_args`, which `idf.py flash` reads, is outside the receipts and the
   inspection. The server never flashes.
 - Two `kode_build` calls on one project at once, and the POSIX process-group kill path,
   were not tested.
-- One real build passed (commit 46271fa); the code after it has not been built for real.
+- One real build passed (commit 46271fa). The attempt to build the code after it was BLOCKED
+  (cut short, no failure found); that code has not been built for real.
 - Build receipts last only for the server process. After a restart every image is
   unattested until it is rebuilt.
 - A process that detaches itself outlives a timed-out build. The deadline ends the build
@@ -706,7 +888,7 @@ Deferred, with the reason:
 
 ## Manual validation checklist
 
-Items marked done were done by the workflow on the development host, on commit 46271fa, and
+Items marked done were done by the workflow on the development host, on commit 46271fa (except the G2-1 item, which is a code and gate item), and
 are not a person's validation on a device. Everything else has not been done and needs a
 person with the stated hardware or host.
 
@@ -720,12 +902,15 @@ person with the stated hardware or host.
       v0.1.1 is done, once).
 - [x] Confirm the generated `flasher_args.json` is the single mailbox entry on a real build:
       the inspection reported `mailbox_only` at `0x1a00000` for `rb_app.bin`.
-- [ ] Rebuild the unmodified template on the fixed code and check 11 of 11 inspection checks
-      (the optional test covers the existing build directory only).
+- [ ] Rebuild the unmodified template on the final code and check 13 of 13 inspection checks.
+      Attempted once and BLOCKED (cut short); the optional test covers the older build
+      directory only. Then run `run.ps1 neg` and the second-build refusal.
 - [ ] Run the CMake preset attack through a real `idf.py` with a harmless marker file, to
       move F1 from "read in source" to "executed". Build only, no device.
-- [ ] Decide on G2-1: refuse every `sdkconfig.defaults` line that is not modelled, or check
-      B3 and B7 in the resolved configuration.
+- [x] G2-1: done (the grammar refusal and the resolved-configuration checks) and checked by
+      two gates; see "Round three" above.
+- [ ] Decide on NEW-1 (accept the refusal of the deleted radio lines, or ask for a different
+      message) and NEW-2 (accept the false refusal for `CONFIG_APP_NO_BLOBS=y`).
 - [ ] On a physical production Dot: read the board revision, serial and installed kodeOS
       release, and compare them with the registry's `DVT` and assessed releases.
 - [ ] Confirm what opening the serial port does to the Dot, then exercise the four console
