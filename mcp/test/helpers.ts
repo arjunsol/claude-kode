@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import type { BuildDigests } from '../src/build/receipts.js';
 import type { TemplateManifest } from '../src/build/scaffold.js';
 import type { HostConfig } from '../src/build/workspace.js';
 import { IMAGE, MAILBOX, PINNED } from '../src/registry/sdk-contract.js';
@@ -95,6 +96,12 @@ export function buildOutputs(name: string, image: Buffer, options: { appRole?: b
       flash_files: options.flashFiles ?? { [`0x${MAILBOX.offset.toString(16)}`]: `${name}.bin` },
     }),
   };
+}
+
+/** The receipt digests of what `buildOutputs` writes for the same arguments. */
+export function buildDigests(name: string, image: Buffer, options: Parameters<typeof buildOutputs>[2] = {}): BuildDigests {
+  const outputs = buildOutputs(name, image, options);
+  return { image: sha256(image), sdkconfigJson: sha256(outputs['build/config/sdkconfig.json']!), flasherArgs: sha256(outputs['build/flasher_args.json']!) };
 }
 
 /** A stand-in template with the same anchors the scaffold edits. Its contents

@@ -33,10 +33,13 @@ async function workspace() {
 
 test('project names that could leave the workspace or run a command are refused', () => {
   for (const name of ['../escape', '..', 'a/b', 'a\\b', 'C:\\Windows', '/etc', 'app;rm -rf', 'app & del', 'app$(id)',
-    'App', 'my-app', 'a b', '', 'x'.repeat(32), 'kodeos', 'c5_slave', 'app\0', 5, null, undefined, ['app']]) {
+    'App', 'my-app', 'a b', '', 'x'.repeat(32), 'kodeos', 'c5_slave',
+    'con', 'prn', 'aux', 'nul', 'com1', 'com5', 'com9', 'lpt1', 'lpt5', 'lpt9', 'app\0', 5, null, undefined, ['app']]) {
     assert.throws(() => assertProjectName(name), refuses('PROJECT_NAME_INVALID'), String(name));
   }
   assert.equal(assertProjectName('sensor_reader_2'), 'sensor_reader_2');
+  // Only the exact device names are reserved: neighbours are ordinary names.
+  for (const ok of ['com0', 'com10', 'lpt0', 'console', 'auxiliary', 'nulls', 'com', 'lpt']) assert.equal(assertProjectName(ok), ok);
   assert.equal(assertProjectName('x'.repeat(31)).length, 31);
 });
 

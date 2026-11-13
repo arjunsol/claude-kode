@@ -34,11 +34,14 @@ export function hostConfig(env: NodeJS.ProcessEnv = process.env): HostConfig {
   };
 }
 
+/** Windows device names: a directory with one of these names is not an ordinary directory there. */
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/;
+
 export function assertProjectName(name: unknown): string {
   if (typeof name !== 'string' || !PROJECT_NAME_PATTERN.test(name) ||
-      (RESERVED_PROJECT_NAMES as readonly string[]).includes(name)) {
+      (RESERVED_PROJECT_NAMES as readonly string[]).includes(name) || WINDOWS_DEVICE_NAME.test(name)) {
     throw new KodeRefusal('PROJECT_NAME_INVALID',
-      'A project name is 1 to 31 characters of a-z, 0-9 and underscore, and is never kodeos or c5_slave.');
+      'A project name is 1 to 31 characters of a-z, 0-9 and underscore, and is never kodeos, c5_slave or a Windows device name (con, prn, aux, nul, com1 to com9, lpt1 to lpt9).');
   }
   return name;
 }

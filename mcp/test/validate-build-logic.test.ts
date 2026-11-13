@@ -214,6 +214,17 @@ describe('the bounded directory walk', () => {
     }
   });
 
+  it('refuses Kconfig* files in any letter case, but not in the top-level build/ or managed_components/', async () => {
+    for (const path of ['main/Kconfig.projbuild', 'Kconfig', 'main/KCONFIG.projbuild', 'tools/sub/kconfig.evil']) {
+      const project = await scaffolded();
+      await writeFiles(project.dir, { [path]: 'menu "x"\nendmenu\n' });
+      await assertIneligible(project.name, 'BL-EXTRA-BUILD-FILE');
+    }
+    const ok = await scaffolded();
+    await writeFiles(ok.dir, { 'build/Kconfig.projbuild': '# generated\n', 'managed_components/x/Kconfig': '# fetched\n' });
+    assert.equal((await gate(ok.name)).buildLogic.eligible, true);
+  });
+
   it('skips only the top-level build/ and managed_components/', async () => {
     const project = await scaffolded();
     await writeFiles(project.dir, { 'main/build/idf_ext.py': 'x = 1\n' });
@@ -362,6 +373,49 @@ describe('C12 sees the flash and OTA identifiers the review showed it missing', 
     for (const [label, extra] of cases) {
       const finding = await c12(`c12_${n++}`, extra);
       assert.equal(finding.status, 'fail', `${label} must fail C12`);
+    }
+  });
+
+  it('fails on any text file under main/, whatever its extension, and on a name split by a line splice', async () => {
+    const call = 'void f(void){ esp_ota_begin(0,0,0); }\n';
+    const cases: Array<[string, Record<string, string>]> = [
+      ['main/evil.c++', { 'main/evil.c++': call }],
+      ['main/evil.cp', { 'main/evil.cp': call }],
+      ['main/evil.sx', { 'main/evil.sx': call }],
+      ['main/evil.hxx', { 'main/evil.hxx': call }],
+      ['main/evil.C', { 'main/evil.C': call }],
+      ['#included main/payload.txt', { 'main/payload.txt': call, 'main/inc.c': '#include "payload.txt"\n' }],
+      ['splice with LF', { 'main/evil.c': 'void f(void){ esp_o\\\nta_begin(0,0,0); }\n' }],
+      ['splice with CRLF', { 'main/evil.c': 'void f(void){ esp_o\\\r\nta_begin(0,0,0); }\r\n' }],
+    ];
+    for (const [label, extra] of cases) {
+      assert.equal((await c12(`c12_${n++}`, extra)).status, 'fail', `${label} must fail C12`);
+    }
+  });
+
+  it('skips a binary file under main/ of any size instead of rejecting it', async () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]), Buffer.alloc(200 * 1024, 0x61)]);
+    const small = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0x65, 0x73, 0x70, 0x5f, 0x6f, 0x74, 0x61, 0x5f, 0x62, 0x65, 0x67, 0x69, 0x6e]);
+    const name = `c12_${n++}`;
+    await writeFiles(join(ws.dir, name), { ...projectFiles(name), 'main/logo.png': png, 'main/tiny.bin': small });
+    const outcome = await validateProject(config, name);
+    assert.equal(outcome.findings.find(f => f.rule === 'C12')?.status, 'pass');
+    assert.ok(!outcome.findings.some(f => f.rule === 'CK-FILE-BOUND'));
+    assert.equal(outcome.verdict, 'pass');
+  });
+
+  it('warns, without changing the verdict, when a source includes a path that leaves main/', async () => {
+    const plain = await c12(`c12_${n++}`, { 'main/inc.c': '#include "inc.h"\n' });
+    assert.equal(plain.status, 'pass');
+    for (const target of ['"../evil.h"', '<../evil.h>', '"sub/../../evil.h"']) {
+      const name = `c12_${n++}`;
+      await writeFiles(join(ws.dir, name), { ...projectFiles(name), 'evil.h': 'static inline void f(void){ esp_ota_begin(0,0,0); }\n', 'main/inc.c': `#include ${target}\r\n` });
+      const outcome = await validateProject(config, name);
+      const warning = outcome.findings.find(f => f.rule.startsWith('C12') && f.level === 'warn');
+      assert.ok(warning && warning.status === 'fail', `${target} must warn`);
+      assert.match(warning.message, /not scanned/);
+      assert.equal(outcome.verdict, 'pass', 'a warning does not change the verdict');
+      assert.equal(outcome.findings.find(f => f.rule === 'C12' && f.level === 'reject')?.status, 'pass');
     }
   });
 

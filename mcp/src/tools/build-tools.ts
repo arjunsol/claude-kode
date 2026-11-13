@@ -83,6 +83,7 @@ const buildPayload = z.object({
   }).strict(),
   reproduciblyPinned: z.boolean(),
   validation: z.object({ verdict: z.enum(['pass', 'fail']), warnings: z.number() }).strict(),
+  buildLogicWarnings: z.array(z.string()),
   inspection: inspectionSchema,
   logTail: z.string(),
   evidence: z.object({ level: z.literal('L1'), result: z.literal('passed'), note: z.string() }).strict(),
@@ -114,6 +115,13 @@ function inspectionResult(tool: string, inspection: z.infer<typeof inspectionSch
   const failed = inspection.checks.filter(check => !check.pass).map(check => check.id).join(', ');
   return { status: 'not_verified', reasonCode: 'IMAGE_NOT_INSTALL_COMPATIBLE',
     message: `${tool === 'kode_build' ? 'The build produced an image, but it' : 'The image'} does not meet the kodeOS app contract (failed: ${failed}).` };
+}
+
+/** Append the build-logic warnings to a build message, so a build that trusted
+ * something it could not verify says so in the message and not only in the payload. */
+export function withBuildLogicWarnings(message: string, warnings: readonly string[]): string {
+  return warnings.length === 0 ? message
+    : `${message} Not verified, and used by this build: ${warnings.join(' ')}`;
 }
 
 export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
@@ -182,7 +190,8 @@ export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
       const outcome = await buildApp(hostConfig(deps.env), input.projectName, {
         ...(deps.runBuild !== undefined ? { run: deps.runBuild } : {}), receipts,
       });
-      const summary = inspectionResult(tool, outcome.inspection);
+      const base = inspectionResult(tool, outcome.inspection);
+      const summary = { ...base, message: withBuildLogicWarnings(base.message, outcome.buildLogicWarnings) };
       return toToolResult(makeResult({
         tool, effectClass: 'H1', ...summary, verifiedLayer: 'build', payload: outcome, evidence: evidence(),
         artefactSha256: outcome.inspection.artefact.sha256, requiredNextEvidence: DEVICE_GATES,

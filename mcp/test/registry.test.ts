@@ -207,10 +207,32 @@ test('a test record backs only the claim it was taken for: profile, board revisi
   const otherRevision = record({ id: 'run.pvt', board: { profileId: PRODUCTION_PROFILE_ID, revision: 'PVT' } });
   assert.throws(() => new CapabilityRegistry(withRecords([otherRevision], [claimWith('c.pvt', 'device_verified', 'run.pvt')])),
     /same profile, board revision and module/);
-  // ...but a claim that is not revision scoped does not reject on revision.
-  const unscoped = claimWith('c.unscoped', 'device_verified', 'run.pvt',
-    { scope: { ...baseClaim().scope, boardRevisions: [] } });
-  assert.doesNotThrow(() => new CapabilityRegistry(withRecords([otherRevision], [unscoped])));
+  // A claim that is not revision scoped (every shipped claim) accepts a record for a
+  // revision the profile knows, and rejects one for a revision it does not know.
+  const unscopedScope = { ...baseClaim().scope, boardRevisions: [] };
+  const unscoped = claimWith('c.unscoped', 'device_verified', 'run.pvt', { scope: unscopedScope });
+  assert.throws(() => new CapabilityRegistry(withRecords([otherRevision], [unscoped])),
+    /same profile, board revision and module/);
+  const evt = record({ id: 'run.evt', board: { profileId: PRODUCTION_PROFILE_ID, revision: 'EVT' } });
+  assert.throws(() => new CapabilityRegistry(withRecords([evt],
+    [claimWith('c.evt', 'device_verified', 'run.evt', { scope: unscopedScope })])), /same profile, board revision and module/);
+  const known = record({ id: 'run.dvt' });
+  assert.doesNotThrow(() => new CapabilityRegistry(withRecords([known],
+    [claimWith('c.known', 'device_verified', 'run.dvt', { scope: unscopedScope })])));
+
+  // A module claim needs a record that names its module, at either level: a
+  // board-level L3 record does not back it, and a maker record does not back a camera claim.
+  const l3Board = record({ id: 'run.l3board' });
+  assert.throws(() => new CapabilityRegistry(withRecords([l3Board],
+    [claimWith('module.camera.l3', 'device_verified', 'run.l3board', { subject: 'module:camera' })])),
+  /same profile, board revision and module/);
+  const l3Camera = record({ id: 'run.l3camera', moduleId: 'camera' });
+  assert.doesNotThrow(() => new CapabilityRegistry(withRecords([l3Camera],
+    [claimWith('module.camera.l3', 'device_verified', 'run.l3camera', { subject: 'module:camera' })])));
+  const l3Maker = record({ id: 'run.l3maker', moduleId: 'maker' });
+  assert.throws(() => new CapabilityRegistry(withRecords([l3Maker],
+    [claimWith('module.camera.l3', 'device_verified', 'run.l3maker', { subject: 'module:camera' })])),
+  /same profile, board revision and module/);
 
   // A maker L4 record is not proof of a camera claim; a camera one is.
   const maker = record({ id: 'run.maker', level: 'L4', moduleId: 'maker', moduleRevision: 'r1' });

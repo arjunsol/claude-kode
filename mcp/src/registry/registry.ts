@@ -130,17 +130,23 @@ export class CapabilityRegistry {
       return;
     }
     const records = claim.testRecordIds.map(id => this.testRecords.get(id));
-    // A record only proves the claim it was taken for: same hardware profile, a
-    // board revision the claim is scoped to (an empty list is "not revision
-    // scoped"), the same module for a module claim, and observed no later than
-    // the claim's review date. Otherwise a prototype or another module's run
-    // would read as proof of a production claim.
-    const moduleSubject = /^module:([a-z]+)$/.exec(claim.subject)?.[1];
+    // A record only proves the claim it was taken for: same hardware profile; a
+    // board revision the claim is scoped to, or, when the claim is not revision
+    // scoped (an empty list), one of the revisions the profile knows (every
+    // shipped claim is unscoped, so this is the check that applies to them); the
+    // module a module claim is about, on a record of either level (a board-level
+    // L3 record names no module and so cannot back a module claim); and
+    // observed no later than the claim's review date. Otherwise a prototype, an
+    // unknown revision or another module's run would read as proof.
+    const moduleSubject = /^module:(.+)$/.exec(claim.subject)?.[1];
+    const knownRevisions = this.profiles.get(claim.scope.profileId)?.knownBoardRevisions ?? [];
+    const revisionAccepted = (revision: string): boolean => claim.scope.boardRevisions.length === 0
+      ? knownRevisions.includes(revision) : claim.scope.boardRevisions.includes(revision);
     const backed = records.some(record => record !== undefined && !record.simulated &&
       record.result === 'passed' && needed.includes(record.level) &&
       record.board.profileId === claim.scope.profileId &&
-      (claim.scope.boardRevisions.length === 0 || claim.scope.boardRevisions.includes(record.board.revision)) &&
-      (moduleSubject === undefined || record.level !== 'L4' || record.moduleId === moduleSubject) &&
+      revisionAccepted(record.board.revision) &&
+      (moduleSubject === undefined || record.moduleId === moduleSubject) &&
       record.observedAt <= claim.reviewBy);
     if (!backed) {
       throw new RegistryIntegrityError(

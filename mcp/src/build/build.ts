@@ -13,20 +13,24 @@
  * The argument vector is therefore not a sandbox. Build with no Dot attached.
  */
 import { execFile, spawn } from 'node:child_process';
+import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { KodeRefusal } from '../result.js';
-import type { BuildReceipts } from './receipts.js';
+import type { BuildDigests, BuildReceipts } from './receipts.js';
 import type { TemplateManifest } from './scaffold.js';
 import { IDF_SERIES, PINNED } from '../registry/sdk-contract.js';
-import { inspectImage, type ImageInspection } from './image.js';
+import { inspectImageWithDigests, type ImageInspection } from './image.js';
 import { idfStatus } from './toolchain.js';
 import { validateProject, type ValidationOutcome } from './validate.js';
 import { assertRealEntry, requireProject, type HostConfig } from './workspace.js';
 
 export type BuildProcessResult = {
   exitCode: number | null; timedOut: boolean; output: string;
-  /** Set only when the deadline fired: whether the whole process tree was confirmed ended. */
-  treeKilled?: boolean;
+  /** Set only when the deadline fired: whether the operating system reported that the build
+   * process and the processes still attached to it were ended. A process that detached itself
+   * (its parent already gone) is not reached by that and is not tracked, so this is not a
+   * statement that nothing is still running. */
+  attachedTreeEnded?: boolean;
 };
 export type BuildRunner = (
   program: string, args: readonly string[],
@@ -36,14 +40,19 @@ export type BuildRunner = (
 /** The only verb this service can ever pass to idf.py. */
 const BUILD_VERB = 'build';
 const OUTPUT_TAIL = 6000;
+/** Entries whose pre-existence makes a build refuse (see buildApp). */
+const BUILD_STATE_ENTRIES = ['build', 'sdkconfig', 'sdkconfig.old'] as const;
 
 export function buildArguments(idfPath: string, projectDir: string): string[] {
   return [join(idfPath, 'tools', 'idf.py'), '-C', projectDir, '-B', join(projectDir, 'build'), BUILD_VERB];
 }
 
-/** End a process and everything it started. On Windows that is
- * `taskkill /T /F` against the PID this module spawned (never an image name);
- * elsewhere the child leads its own process group and the group is signalled.
+/** End a process and the processes still attached to it. On Windows that is
+ * `taskkill /T /F` against the PID this module spawned (never an image name),
+ * which follows parent links, so a process that detached itself and whose parent
+ * already exited is not reached; elsewhere the child leads its own process group
+ * and the group is signalled, which a process that started its own group escapes.
+ * Node cannot place a child in a Windows Job Object without a native module.
  * Resolves true only when the operating system reported success. */
 function killTree(pid: number | undefined): Promise<boolean> {
   if (pid === undefined) return Promise.resolve(false);
@@ -60,8 +69,8 @@ function killTree(pid: number | undefined): Promise<boolean> {
   }
 }
 
-/** Runs without a shell, keeps only the tail of the output, and ends the whole
- * process tree at the deadline. Never retries. */
+/** Runs without a shell, keeps only the tail of the output, and ends the build process and
+ * what is still attached to it at the deadline. Never retries. */
 export const systemBuildRunner: BuildRunner = (program, args, options) => new Promise((resolve, reject) => {
   const child = spawn(program, [...args], {
     cwd: options.cwd, env: options.env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
@@ -82,10 +91,10 @@ export const systemBuildRunner: BuildRunner = (program, args, options) => new Pr
     timedOut = true;
     // A descendant that outlives the kill can hold the pipes open, so do not
     // wait for 'close' once the kill has been attempted.
-    void killTree(child.pid).then(treeKilled => {
+    void killTree(child.pid).then(attachedTreeEnded => {
       child.stdout.destroy();
       child.stderr.destroy();
-      finish({ exitCode: null, timedOut: true, output: '', treeKilled });
+      finish({ exitCode: null, timedOut: true, output: '', attachedTreeEnded });
     });
   }, options.timeoutMs);
   child.on('error', error => { clearTimeout(timer); if (!settled) { settled = true; reject(error); } });
@@ -100,6 +109,8 @@ export type BuildOutcome = {
   /** True only when the ESP-IDF commit was read and equals the pinned v6.1 commit. */
   reproduciblyPinned: boolean;
   validation: { verdict: ValidationOutcome['verdict']; warnings: number };
+  /** Build-logic warnings (for example a pre-existing managed_components, which cannot be verified), as `rule: message`. */
+  buildLogicWarnings: string[];
   inspection: ImageInspection;
   logTail: string;
   evidence: { level: 'L1'; result: 'passed'; note: string };
@@ -107,7 +118,7 @@ export type BuildOutcome = {
 
 export type BuildOptions = {
   run?: BuildRunner;
-  /** Where to record the digest of an image this call produced. */
+  /** Where to record the digests of the outputs this call produced. */
   receipts?: BuildReceipts;
   /** The template manifest the build gate compares the project against. */
   pinnedFiles?: TemplateManifest;
@@ -134,6 +145,20 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
   await assertRealEntry(dir, 'build', 'directory');
   await assertRealEntry(dir, 'managed_components', 'directory');
   await assertRealEntry(dir, 'sdkconfig', 'file');
+  // Every build is a clean build. Generated state that exists before the build
+  // starts cannot be told apart from planted state: a CMakeCache.txt can pull in
+  // project CMake, a junction inside build/ can send output outside the workspace,
+  // and a root sdkconfig overrides sdkconfig.defaults, the only file the static
+  // rules read. So refuse before validation is used and before any process starts.
+  // The server never deletes these: it removes nothing it did not create in the call.
+  const present: string[] = [];
+  for (const entry of BUILD_STATE_ENTRIES) {
+    try { await lstat(join(dir, entry)); present.push(entry); } catch { /* absent */ }
+  }
+  if (present.length > 0) {
+    throw new KodeRefusal('BUILD_STATE_PRESENT',
+      `${present.join(', ')} already exist${present.length === 1 ? 's' : ''} in the project, so it was not built. Generated state that exists before a build cannot be told apart from planted state, so every build starts clean. Remove ${present.join(', ')} yourself and build again; call kode_inspect_image first if you still need the existing build output. The server deletes nothing.`);
+  }
   const validation = await validateProject(config, name, options.pinnedFiles);
   if (validation.verdict !== 'pass') {
     const failed = validation.findings.filter(finding => finding.level === 'reject' && finding.status === 'fail')
@@ -144,7 +169,9 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
   // Validation is a read and safe on any project; a build runs the project's
   // CMake, so it needs the stricter gate: build logic identical to the template's.
   if (!validation.buildLogic.eligible) {
-    const failed = validation.buildLogic.findings.filter(finding => finding.status === 'fail')
+    // Only the rules that made it ineligible: a warning is not a reason for refusal.
+    const failed = validation.buildLogic.findings
+      .filter(finding => finding.level === 'reject' && finding.status === 'fail')
       .map(finding => `${finding.rule}: ${finding.message}`);
     throw new KodeRefusal('BUILD_LOGIC_NOT_PINNED',
       `The project's build logic is not the pinned template's, so it was not built. ${failed.join(' ')}`);
@@ -160,16 +187,18 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
     throw new KodeRefusal('BUILD_FAILED', 'The build process could not be started. Nothing was retried.', 'failed');
   }
   if (result.timedOut) {
-    throw new KodeRefusal('BUILD_TIMEOUT', result.treeKilled === true
-      ? `The build exceeded ${config.buildTimeoutMs / 1000} s and its process tree was ended. Nothing was retried.`
-      : `The build exceeded ${config.buildTimeoutMs / 1000} s. Ending the process tree was not confirmed, so processes it started may still be running on this host. Nothing was retried.`, 'failed');
+    const limit = `The build exceeded ${config.buildTimeoutMs / 1000} s.`;
+    throw new KodeRefusal('BUILD_TIMEOUT', result.attachedTreeEnded === true
+      ? `${limit} The build process and the processes still attached to it were ended. A process that detached itself cannot be tracked and may still be running on this host. Nothing was retried.`
+      : `${limit} Ending the build process and the processes attached to it was not confirmed, so they, and any process that detached itself, may still be running on this host. Nothing was retried.`, 'failed');
   }
   if (result.exitCode !== 0) {
     throw new KodeRefusal('BUILD_FAILED', `idf.py build exited with ${result.exitCode}. Log tail:\n${result.output}`, 'failed');
   }
   let inspection: ImageInspection;
+  let digests: BuildDigests;
   try {
-    inspection = await inspectImage(config, name, options.receipts);
+    ({ inspection, digests } = await inspectImageWithDigests(config, name, options.receipts));
   } catch (error) {
     if (error instanceof KodeRefusal && error.reasonCode === 'IMAGE_NOT_FOUND') {
       throw new KodeRefusal('BUILD_OUTPUT_MISSING', `idf.py build exited 0 but build/${name}.bin is missing, so no image exists to report.`, 'failed');
@@ -179,7 +208,7 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
   // The build just produced these bytes: record them, so a later inspection of
   // the same unchanged image can say a build this server ran made it.
   if (options.receipts) {
-    options.receipts.record(name, inspection.artefact.sha256);
+    options.receipts.record(name, digests);
     inspection.buildObserved = true;
   }
   return {
@@ -192,6 +221,9 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
     },
     reproduciblyPinned: idf.commitMatchesPin === true,
     validation: { verdict: validation.verdict, warnings: validation.warnings },
+    buildLogicWarnings: validation.buildLogic.findings
+      .filter(finding => finding.level === 'warn' && finding.status === 'fail')
+      .map(finding => `${finding.rule}: ${finding.message}`),
     inspection,
     logTail: result.output,
     evidence: {

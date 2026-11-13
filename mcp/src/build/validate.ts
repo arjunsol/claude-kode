@@ -5,7 +5,7 @@
  * Rules that need a build, a device or a reviewer are listed as not checked.
  */
 import { createHash } from 'node:crypto';
-import { lstat, readdir } from 'node:fs/promises';
+import { lstat, open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { KodeRefusal } from '../result.js';
 import {
@@ -192,7 +192,8 @@ function parseDependencies(text: string): Dependency[] {
  * prebuilt library can all defeat it, and it is no substitute for checking the
  * built ELF's imports. A pass means only that none of these names appears. */
 const FORBIDDEN_FLASH_NAMES = /\b(?:esp_ota_\w+|esp_partition_(?:write|erase)\w*|esp_flash_(?:write|erase)\w*|spi_flash_(?:write|erase)\w*|esp_rom_spiflash_\w*(?:write|erase)\w*|bootloader_flash_(?:write|erase)\w*|nvs_flash_erase\w*)/;
-const SOURCE_EXTENSIONS = ['.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hh', '.inc', '.s'];
+/** A file is binary (and skipped by C12) when a NUL byte is in its first 8 KiB. */
+const BINARY_PROBE_BYTES = 8 * 1024;
 const MANIFEST_EXTENSIONS = ['.c', '.h', '.cpp', '.hpp'];
 const RAW_FLASH_COMMAND = /\b(write[-_]flash|erase[-_]flash)\b/i;
 const SOURCE_LIMIT = 200;
@@ -214,7 +215,7 @@ function exceedsParseBounds(text: string, fileLimit = PARSE_FILE_LIMIT): boolean
   }
 }
 
-/** Source files under main/, recursively and without following links. */
+/** Every file under main/, whatever its extension, recursively and without following links. */
 async function listSourceTree(mainDir: string): Promise<{ files: string[]; truncated: boolean }> {
   const files: string[] = [];
   let truncated = false;
@@ -229,7 +230,7 @@ async function listSourceTree(mainDir: string): Promise<{ files: string[]; trunc
       const path = rel === '' ? entry.name : `${rel}/${entry.name}`;
       if (entry.isDirectory()) {
         if (depth >= SOURCE_TREE_DEPTH) truncated = true; else await visit(path, depth + 1);
-      } else if (entry.isFile() && SOURCE_EXTENSIONS.some(ext => entry.name.toLowerCase().endsWith(ext))) {
+      } else if (entry.isFile()) {
         if (files.length >= SOURCE_TREE_FILES) { truncated = true; return; }
         files.push(path);
       }
@@ -238,6 +239,31 @@ async function listSourceTree(mainDir: string): Promise<{ files: string[]; trunc
   await visit('', 1);
   return { files, truncated };
 }
+
+/** Whether the file looks binary: a NUL byte in its first 8 KiB. Reads only that prefix, so
+ * an image of any size is classified without being loaded or parsed. */
+async function looksBinary(path: string): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(path, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const buffer = Buffer.alloc(BINARY_PROBE_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, BINARY_PROBE_BYTES, 0);
+    return buffer.subarray(0, bytesRead).includes(0);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Backslash-newline (also CRLF) is deleted before tokenising in C, so a name split
+ * by one is still that name. Linear: one pass over a bounded file. */
+const joinLineSplices = (text: string): string => text.replace(/\\\r?\n/g, '');
+
+/** Includes whose path leaves main/ via "..": the target is not scanned. */
+const PARENT_INCLUDE = /^[ \t]*#[ \t]*include[ \t]*["<]([^">\r\n]*)[">]/gm;
 
 async function listFiles(dir: string, extensions: string[]): Promise<string[]> {
   try {
@@ -385,7 +411,12 @@ async function walkProject(dir: string): Promise<WalkResult> {
       }
       if (depth === 1 && (canonical === 'build' || canonical === 'managed_components')) continue;
       const lowerPath = path.split('/').map(canonicalName).join('/');
+      // Kconfig* files are refused as a PRECAUTION, not a demonstrated exploit: upstream
+      // kconfiglib has a preprocessor with a shell function, and whether ESP-IDF's
+      // variant runs it could not be checked (ESP-IDF was not installed). The official
+      // template has no Kconfig file, so a project from it is unaffected.
       if (canonical === 'idf_ext.py' || canonical.endsWith('.cmake') || canonical.startsWith('sdkconfig.defaults.') ||
+          (!child.isDirectory() && canonical.startsWith('kconfig')) ||
           (canonical === 'cmakelists.txt' && lowerPath !== 'cmakelists.txt' && lowerPath !== 'main/cmakelists.txt') ||
           (depth === 1 && canonical === 'components')) {
         result.extra.push(path);
@@ -456,7 +487,7 @@ async function checkBuildLogic(dir: string, name: string, pinnedFiles: TemplateM
   // 4 and 6. Nothing else that a build would load, and no links.
   const walk = await walkProject(dir);
   gate('BL-EXTRA-BUILD-FILE', walk.extra.length === 0,
-    'No idf_ext.py, .cmake file, extra CMakeLists.txt, components/ directory or per-target defaults file.',
+    'No idf_ext.py, .cmake file, Kconfig* file, extra CMakeLists.txt, components/ directory or per-target defaults file.',
     `These files would be loaded by a build and are not part of the pinned template: ${walk.extra.slice(0, 10).map(echo).join(', ')}${walk.extra.length > 10 ? ' and more' : ''}.`);
   gate('BL-LINK', walk.links.length === 0,
     'No top-level entry, and nothing in main/ or appdata/, is a link.',
@@ -515,10 +546,10 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
       text = await readTextInside(dir, rel, PARSE_FILE_LIMIT);
     } catch (error) {
       if (!(error instanceof KodeRefusal) || error.reasonCode !== 'VALIDATION_FAILED') throw error;
-      unparsed.push(rel);
+      if (!unparsed.includes(rel)) unparsed.push(rel);
       return undefined;
     }
-    if (text !== undefined && exceedsParseBounds(text)) { unparsed.push(rel); return undefined; }
+    if (text !== undefined && exceedsParseBounds(text)) { if (!unparsed.includes(rel)) unparsed.push(rel); return undefined; }
     return text;
   };
   const outcome: ValidationOutcome = {
@@ -613,10 +644,13 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
   let manifests: RegExpMatchArray[] = [];
   const flashCallers: string[] = [];
   const unscanned: string[] = [];
+  const leavingMain: string[] = [];
   for (const file of tree.files) {
+    if (await looksBinary(join(dir, 'main', file))) continue;
     const raw = await readParsed(`main/${file}`);
     if (raw === undefined) { unscanned.push(file); continue; }
-    const text = stripCComments(raw);
+    const text = stripCComments(joinLineSplices(raw));
+    if ([...text.matchAll(PARENT_INCLUDE)].some(match => (match[1] ?? '').includes('..'))) leavingMain.push(file);
     // The manifest macro is looked for where it always was: the top level of main/.
     if (!file.includes('/') && MANIFEST_EXTENSIONS.some(ext => file.toLowerCase().endsWith(ext))) {
       manifests = manifests.concat([...text.matchAll(/\bKODE_APP_MANIFEST\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)/g)]);
@@ -636,10 +670,15 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
   const c12Caveat = 'This is a source heuristic: token pasting, a macro that builds the name or a prebuilt library can defeat it, and it does not replace checking the built ELF.';
   const c12Gaps = tree.truncated || unscanned.length > 0;
   check('C12', 'reject', flashCallers.length === 0 && !c12Gaps,
-    `No OTA, flash write/erase or NVS erase identifier appears in the ${tree.files.length} source file(s) under main/. ${c12Caveat}`,
+    `No OTA, flash write/erase or NVS erase identifier appears in the text file(s) under main/ (${tree.files.length} file(s) listed; binary files are skipped). ${c12Caveat}`,
     flashCallers.length > 0
       ? `OTA, flash write/erase and NVS erase identifiers are refused: ${flashCallers.slice(0, 10).map(echo).join(', ')}. ${c12Caveat}`
       : `main/ could not be scanned completely (${unscanned.length} file(s) over the parse bounds, or more than ${SOURCE_TREE_FILES} files or ${SOURCE_TREE_DEPTH} levels), so C12 cannot pass. ${c12Caveat}`);
+
+  if (leavingMain.length > 0) {
+    findings.push({ rule: 'C12-INCLUDE', level: 'warn', status: 'fail',
+      message: `A source under main/ includes a path containing "..": ${leavingMain.slice(0, 10).map(echo).join(', ')}. Files outside main/ are not scanned by C12, so a flash call there would not be seen.` });
+  }
 
   // ---- appdata and licence ----
   const appJsonRaw = await readTextInside(dir, 'appdata/app.json', 16 * 1024);

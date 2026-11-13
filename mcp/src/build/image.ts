@@ -14,8 +14,8 @@ import {
   CATALOGUE_IMAGE_MAX, CATEGORIES, CHIP_IDS, IMAGE, MAILBOX, MANIFEST_LIMITS, PARTITIONS, REQUIRED_CHIP,
 } from '../registry/sdk-contract.js';
 import { isSupportedIdf } from '../registry/policy.js';
-import type { BuildReceipts } from './receipts.js';
-import { readInside, readTextInside, requireProject, type HostConfig } from './workspace.js';
+import type { BuildDigests, BuildReceipts } from './receipts.js';
+import { readInside, requireProject, type HostConfig } from './workspace.js';
 
 export type ImageCheck = { id: string; pass: boolean; detail: string };
 
@@ -55,6 +55,14 @@ function cString(bytes: Buffer, offset: number, length: number): string {
   const end = slice.indexOf(0);
   return slice.subarray(0, end < 0 ? slice.length : end).toString('latin1');
 }
+
+/** Strings taken from build metadata are echoed at most this long. */
+const ECHO_MAX = 64;
+/** At most this many flash entries are reported. */
+const FLASH_ENTRIES_MAX = 16;
+const clip = (text: string): string => text.length > ECHO_MAX ? `${text.slice(0, ECHO_MAX - 3)}...` : text;
+/** Only `0x` followed by hex digits names an offset; the value is compared numerically. */
+const HEX_OFFSET = /^0x[0-9a-fA-F]+$/;
 
 const printable = (text: string): boolean => /^[\x20-\x7e]*$/.test(text);
 
@@ -114,6 +122,14 @@ function parseJson(text: string | undefined): Record<string, unknown> | undefine
 }
 
 export async function inspectImage(config: HostConfig, projectName: unknown, receipts?: BuildReceipts): Promise<ImageInspection> {
+  return (await inspectImageWithDigests(config, projectName, receipts)).inspection;
+}
+
+const digestOf = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+
+/** The inspection, and the digests of the three files it was judged from, so the
+ * build can record exactly what it inspected. */
+export async function inspectImageWithDigests(config: HostConfig, projectName: unknown, receipts?: BuildReceipts): Promise<{ inspection: ImageInspection; digests: BuildDigests }> {
   const { dir, name } = await requireProject(config, projectName);
   const relative = `build/${name}.bin`;
   let bytes: Buffer | undefined;
@@ -148,33 +164,40 @@ export async function inspectImage(config: HostConfig, projectName: unknown, rec
   // A manifest that is present but empty, or names categories the catalogue
   // does not have, is not one the catalogue would accept.
   const manifestValid = parsed.manifest !== undefined &&
-    parsed.manifest.displayName.length >= 1 && parsed.manifest.displayName.length <= MANIFEST_LIMITS.displayNameMax &&
+    parsed.manifest.displayName.trim().length >= 1 && parsed.manifest.displayName.length <= MANIFEST_LIMITS.displayNameMax &&
     parsed.manifest.categories.length >= 1 && parsed.manifest.categories.length <= MANIFEST_LIMITS.categoriesMax &&
+    new Set(parsed.manifest.categories).size === parsed.manifest.categories.length &&
     parsed.manifest.categories.every(category => (CATEGORIES as readonly string[]).includes(category));
   const manifestOk = check('app.manifest', manifestValid,
-    parsed.manifest ? `KODE_APP_MANIFEST v${parsed.manifest.version}: "${parsed.manifest.displayName}" in ${parsed.manifest.categories.join(', ') || 'no categories'}${manifestValid ? '.' : `; the catalogue needs a name of 1 to ${MANIFEST_LIMITS.displayNameMax} characters and 1 to ${MANIFEST_LIMITS.categoriesMax} categories from ${CATEGORIES.join(', ')}.`}`
+    parsed.manifest ? `KODE_APP_MANIFEST v${parsed.manifest.version}: "${parsed.manifest.displayName}" in ${parsed.manifest.categories.join(', ') || 'no categories'}${manifestValid ? '.' : `; the catalogue needs a name of 1 to ${MANIFEST_LIMITS.displayNameMax} characters with at least one that is not a space, and 1 to ${MANIFEST_LIMITS.categoriesMax} different categories from ${CATEGORIES.join(', ')}.`}`
       : 'No readable KODE_APP_MANIFEST ("KAPD") at offset 0x120: kodeOS would treat the app as unmanifested.');
-  const sdkconfig = parseJson(await readTextInside(dir, 'build/config/sdkconfig.json', 2 * 1024 * 1024));
+  const sdkconfigBytes = await readInside(dir, 'build/config/sdkconfig.json', 2 * 1024 * 1024);
+  const sdkconfig = parseJson(sdkconfigBytes?.toString('utf8'));
   const bootRoleApp = sdkconfig ? sdkconfig.KODEOS_BOOT_ROLE_APP === true : null;
-  const configuredTarget = sdkconfig && typeof sdkconfig.IDF_TARGET === 'string' ? sdkconfig.IDF_TARGET : null;
+  const configuredTarget = sdkconfig && typeof sdkconfig.IDF_TARGET === 'string' ? clip(sdkconfig.IDF_TARGET) : null;
   const roleOk = check('app.boot_role', bootRoleApp === true,
     bootRoleApp === null ? 'build/config/sdkconfig.json is missing or unreadable, so the boot role is unknown.'
       : `The resolved configuration has KODEOS_BOOT_ROLE_APP=${bootRoleApp}.`);
   const targetOk = check('app.configured_target', configuredTarget === REQUIRED_CHIP,
     `The resolved configuration targets ${configuredTarget ?? 'unknown'}.`);
 
-  const flasher = parseJson(await readTextInside(dir, 'build/flasher_args.json', 256 * 1024));
+  const flasherBytes = await readInside(dir, 'build/flasher_args.json', 256 * 1024);
+  const flasher = parseJson(flasherBytes?.toString('utf8'));
   const flashFiles = flasher?.flash_files;
-  const flashEntries = flashFiles !== null && typeof flashFiles === 'object' && !Array.isArray(flashFiles)
+  const allEntries = flashFiles !== null && typeof flashFiles === 'object' && !Array.isArray(flashFiles)
     ? Object.entries(flashFiles as Record<string, unknown>).map(([offset, file]) => ({ offset, file: String(file) }))
     : [];
-  const single = flashEntries.length === 1 ? flashEntries[0] : undefined;
-  const mailboxOnly = single !== undefined && Number(single.offset) === MAILBOX.offset && single.file === `${name}.bin`;
+  // The judgement uses the full values; only what is echoed is capped.
+  const single = allEntries.length === 1 ? allEntries[0] : undefined;
+  const mailboxOnly = single !== undefined && HEX_OFFSET.test(single.offset) &&
+    Number.parseInt(single.offset.slice(2), 16) === MAILBOX.offset && single.file === `${name}.bin`;
+  const flashEntries = allEntries.slice(0, FLASH_ENTRIES_MAX).map(entry => ({ offset: clip(entry.offset), file: clip(entry.file) }));
   const flashPlan: ImageInspection['buildMetadata']['flashPlan'] = !flasher ? 'unreadable' : mailboxOnly ? 'mailbox_only' : 'not_mailbox_only';
+  const more = allEntries.length > FLASH_ENTRIES_MAX ? ` (${allEntries.length} entries were present; only the first ${FLASH_ENTRIES_MAX} are listed)` : '';
   const flashOk = check('app.flash_plan', mailboxOnly,
     !flasher ? 'build/flasher_args.json is missing or unreadable, so the generated flash plan was not checked.'
       : mailboxOnly ? `The generated flash plan writes only ${name}.bin at the app_pending offset 0x${MAILBOX.offset.toString(16)}.`
-        : `The generated flash plan is not the single mailbox entry the app role produces: ${flashEntries.map(entry => `${entry.offset}=${entry.file}`).join(', ') || 'no entries'}.`);
+        : `The generated flash plan is not the single mailbox entry the app role produces: ${flashEntries.map(entry => `${entry.offset}=${entry.file}`).join(', ') || 'no entries'}${more}.`);
   const fitsMailbox = bytes.length <= MAILBOX.imageMax;
   const fitsCatalogue = bytes.length <= CATALOGUE_IMAGE_MAX;
   // The flash plan of an app-role build writes only the mailbox, so an image the
@@ -185,7 +208,7 @@ export async function inspectImage(config: HostConfig, projectName: unknown, rec
 
   const inspection: ImageInspection = {
     projectName: name,
-    artefact: { path: relative, sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') },
+    artefact: { path: relative, sizeBytes: bytes.length, sha256: digestOf(bytes) },
     header: { chipId: parsed.chipId, chip: parsed.chip, segments: parsed.segments },
     buildMetadata: { bootRoleApp, configuredTarget, flashPlan, flashEntries },
     size: { mailboxMax: MAILBOX.imageMax, fitsMailbox, catalogueMax: CATALOGUE_IMAGE_MAX, fitsCatalogue, appsRegion: APPS_REGION },
@@ -195,8 +218,13 @@ export async function inspectImage(config: HostConfig, projectName: unknown, rec
     deviceVerification: 'NOT TESTED',
     buildObserved: false,
   };
-  inspection.buildObserved = receipts?.observed(name, inspection.artefact.sha256) ?? false;
+  const digests: BuildDigests = {
+    image: inspection.artefact.sha256,
+    sdkconfigJson: sdkconfigBytes ? digestOf(sdkconfigBytes) : null,
+    flasherArgs: flasherBytes ? digestOf(flasherBytes) : null,
+  };
+  inspection.buildObserved = receipts?.observed(name, digests) ?? false;
   if (parsed.appDescriptor) inspection.appDescriptor = parsed.appDescriptor;
   if (parsed.manifest) inspection.manifest = parsed.manifest;
-  return inspection;
+  return { inspection, digests };
 }
