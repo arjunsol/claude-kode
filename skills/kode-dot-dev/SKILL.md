@@ -64,9 +64,9 @@ v0.1.1 also changed `kcli.py`, added Kody artwork to the SDK notice, mounts
 microSD on one data line, adds a receive-only Wi-Fi frames service and adds
 file, audio and BLE calls to `kode.h`. The template still pins SDK v0.1.0;
 `kode_new_app` edits its `version:` line in `main/idf_component.yml` to v0.1.1
-by default. A v0.1.0 template built against SDK v0.1.1 has not been built by
-this project, so the first real build is the first evidence that combination
-works.
+by default. A v0.1.0 template built against SDK v0.1.1 has been built once by
+this project (a real ESP-IDF v6.1 build, run twice; the second run is the
+authoritative one). That is build evidence only.
 
 kodeOS can update itself ("About offers a newer kodeOS and installs it from
 there"), so a Dot may be running a release nobody assessed. The installed
@@ -164,7 +164,8 @@ treat the answer as the limit of what you can claim.
    template's, and refuses anything else with `BUILD_LOGIC_NOT_PINNED`
    (findings are named `BL-...`). For a project you intend to build, do not add
    an `idf_ext.py`, extra `*.cmake` or `CMakeLists.txt` files, a `components/`
-   directory, per-target `sdkconfig.defaults.<x>` files or links, and do not
+   directory, per-target `sdkconfig.defaults.<x>` files, `CMakePresets.json`,
+   `CMakeUserPresets.json`, `sdkconfig.rename` files or links, and do not
    rewrite the root `CMakeLists.txt` or `main/idf_component.yml`. What is yours
    to edit: source files, `sdkconfig.defaults`, `appdata/`, and the `SRCS` list
    in `main/CMakeLists.txt`, which must stay a single plain
@@ -207,7 +208,8 @@ Never promote `verifiedLayer`. A `source` answer is a manufacturer's file, a
 `kode_inspect_image` keeps four stages apart: a source project; a compiled
 image; an image compatible with kodeOS installation, which is a source-level
 judgement (P4 chip id, app descriptor identity, ESP-IDF v6.1, the `KAPD`
-manifest, the app boot role, a generated `flasher_args.json` with a single
+manifest, the app boot role, `KODEOS_HOME_HOLD` and `KQP_AO_WATCH` both true in
+the resolved configuration, a generated `flasher_args.json` with a single
 mailbox entry, size limits); and a device-verified image, which this project
 never claims and always reports as `NOT TESTED`. The install-compatible
 judgement is strict: the manifest needs a display name of 1 to 31 characters
@@ -225,10 +227,15 @@ the files and is not build evidence. The record is held in memory, so a server
 restart clears it. To get an observed image again, remove `build/`, `sdkconfig`
 and `sdkconfig.old` and run `kode_build` again.
 
-If `kode_build` ends with `BUILD_TIMEOUT`, the build process and what was still
-attached to it were ended. A process that detached itself cannot be tracked and
-may still be running, so tell the user that rather than saying the build left
-nothing behind.
+`BUILD_TIMEOUT` means the build process had not exited at the deadline. Read the
+message: either the build process and what was still attached to it were ended,
+or ending them was not confirmed, and they may still be running. A process that
+detached itself cannot be tracked and may still be running in either case, so
+tell the user which one the message says and do not say the build left nothing
+behind. A build whose process exited is reported by its exit code, never as a
+timeout. If the result carries `outputHeldOpen: true`, something the build
+started still held its output open; it was not ended and may still be running,
+so relay that.
 
 When a tool refuses, report the `reasonCode`, the message and the
 `requiredNextEvidence`, and stop. A refusal means a precondition is absent, so
@@ -243,8 +250,10 @@ the host; do not substitute a hand-built scaffold.
 
 Evidence is graded L1 build verified, L2 simulation verified, L3 device
 verified on a production Dot, and L4 integration verified with real expansion
-modules. A build through `kode_build` is at most L1, and no real build has been
-run yet. No L1, L2, L3 or L4 record exists, so no claim in the registry is
+modules. A build through `kode_build` is at most L1. One real build has passed
+(commit 46271fa, ESP-IDF v6.1.0, v0.1.0 template against SDK v0.1.1); it is
+described in the design record and is not a registry record, because the record
+shape cannot describe a host build. No L1, L2, L3 or L4 record exists, so no claim in the registry is
 `device_verified` or `integration_verified`. Report outcomes as PASS, FAIL, BLOCKED or NOT TESTED,
 with the evidence behind each: a command that was not run is NOT TESTED, not
 PASS, and a refusal is BLOCKED with its reason code.

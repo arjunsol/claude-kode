@@ -27,7 +27,8 @@ For `$ARGUMENTS`:
    waiting work goes to `kode_worker`, a worker job must not touch flash or
    NVS, and an Active Object subscribes before asking for state.
    Keep the project buildable: do not add an `idf_ext.py`, extra CMake or
-   `*.cmake` files, a `components/` directory, `sdkconfig.defaults.<x>` or
+   `*.cmake` files, a `components/` directory, `sdkconfig.defaults.<x>`,
+   `CMakePresets.json`, `CMakeUserPresets.json`, `sdkconfig.rename` or
    `Kconfig*` files, and do not alter the root `CMakeLists.txt` or
    `main/idf_component.yml`. Source files, `sdkconfig.defaults`, `appdata/` and
    the `SRCS` list in `main/CMakeLists.txt` are yours to edit.
@@ -67,9 +68,12 @@ ask the operator to configure the host. `BUILD_LOGIC_NOT_PINNED` means the
 project's build logic is not the template's: remove the extra build files or
 restore the template's, rather than working around the gate. `BUILD_STATE_PRESENT`
 means generated state is already in the project: remove `build/`, `sdkconfig` and
-`sdkconfig.old` and build again. `BUILD_TIMEOUT` means the build process and what
-was still attached to it were ended; a process that detached itself cannot be
-tracked and may still be running, so say so. Do not substitute a hand-made scaffold,
+`sdkconfig.old` and build again. `BUILD_TIMEOUT` means the build process had not
+exited at the deadline: the message says whether it and what was attached to it
+were ended or whether ending them was not confirmed, and a process that detached
+itself cannot be tracked and may still be running, so say so. If a build result
+carries `outputHeldOpen: true`, something the build started still held its
+output open and may still be running; say so too. Do not substitute a hand-made scaffold,
 a shell build, `esptool`, or any flash offset. A project that was scaffolded
 but not built is a source project only; say that.
 

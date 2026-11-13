@@ -18,11 +18,15 @@ npm run build
 npm test
 ```
 
-`npm test` runs without a device, without ESP-IDF and without network access. It runs 163
-tests: 162 pass and 1 is skipped, with or without the template variable below. One test
-scaffolds from a real `kode-app-template` v0.1.0 checkout and is skipped unless you set
-`KODE_TEST_TEMPLATE_DIR` to that checkout (an absolute path). With the variable set, the
-test that checks the refusal without a template is skipped instead.
+`npm test` runs without a device, without ESP-IDF and without network access. It runs 269
+tests: 267 pass, 0 fail and 2 are skipped, with and without the template variable below
+(last run on Windows, Node 24.22.1). One test scaffolds from a real `kode-app-template`
+v0.1.0 checkout and is skipped unless you set `KODE_TEST_TEMPLATE_DIR` to that checkout
+(an absolute path); with the variable set, the test that checks the refusal without a
+template is skipped instead. One test inspects a real build directory and is skipped unless
+you set `KODE_TEST_REAL_BUILD_DIR` to the `build/` directory of a project (named `rb_app`)
+that a real ESP-IDF v6.1 build produced; one run with both variables set gave 268 pass and
+1 skipped.
 
 The plugin root `.mcp.json` declares the built `mcp/dist/server.js` using
 `${CLAUDE_PLUGIN_ROOT}`. Run the build before enabling the plugin, start Claude Code with
@@ -169,7 +173,10 @@ fetches the pinned SDK over the network by tag. Enable it only for projects you 
 build with no Dot attached. At the deadline the build process and the processes still
 attached to it are ended. A process that detached itself cannot be tracked and may still be
 running; the timeout message says so, and says when even the attached ending could not be
-confirmed.
+confirmed. A build whose process has exited with a code is reported by that code, not as a
+timeout, even if something it started still holds its output open: the result then carries
+`outputHeldOpen: true` and a sentence saying that process was not ended and may still be
+running.
 
 ### What kode_build will and will not build
 
@@ -177,18 +184,29 @@ confirmed.
 fixing the command line does not by itself limit what a build does. `kode_build` therefore
 builds only a project whose build logic is the pinned template's, and otherwise refuses
 with `BUILD_LOGIC_NOT_PINNED` before any process starts. In practice that means a project
-made by `kode_new_app` whose build logic has not been altered.
+made by `kode_new_app` whose build-logic files, and the other project files that ESP-IDF
+v6.1 reads, have not been altered or added to.
 
 - The root `CMakeLists.txt` and `main/idf_component.yml` must hash to the pinned
   template's once the scaffold's own edits (name, version, SDK release line) are reversed.
 - `main/CMakeLists.txt` must be one `idf_component_register(...)` call with plain relative
   names.
 - No `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/`,
-  `sdkconfig.defaults.<x>` or file whose name starts with `Kconfig` (any letter case); no
+  `sdkconfig.defaults.<x>`, `CMakePresets.json` or `CMakeUserPresets.json` (idf.py loads
+  them from the project and passes the chosen preset to cmake, which can run CMake the gate
+  has not seen), `sdkconfig.rename` or `sdkconfig.rename.<x>` (a rename line can invert a
+  protected setting) or file whose name starts with `Kconfig` (any letter case), at any
+  depth outside `build/` and `managed_components/`; no
   links; a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target. The
   `Kconfig*` refusal is a precaution: Kconfig has a preprocessor that upstream can use to
   run a shell command, whether ESP-IDF's variant does could not be checked here, and the
   official template has no such file. It is not a demonstrated exploit.
+
+The static rules read `sdkconfig.defaults` as a list of every assignment, in order. Both
+`CONFIG_X=n` and `# CONFIG_X is not set` count as n, and the rules for the app role, hold-BOT
+and the watchdog judge every assignment, not only the last. This is a model of how Kconfig
+reads the file, and it is incomplete (see finding G2-1 in the design record), which is why
+inspection also checks the resolved configuration.
 
 Still the app author's to edit: source files, `sdkconfig.defaults`, `appdata/` and the
 `SRCS` list in `main/CMakeLists.txt`. `kode_validate` reports the gate as `buildLogic`
@@ -274,7 +292,9 @@ captured results to third-party services unless you intend to.
 
 Evidence is kept in four artefact stages and a four-level test scale. The stages
 `kode_inspect_image` keeps apart are: a source project; a compiled image; an image
-compatible with kodeOS installation (a source-level judgement); and a device-verified
+compatible with kodeOS installation (a source-level judgement that now also needs
+`KODEOS_HOME_HOLD` and `KQP_AO_WATCH` to be true in the resolved configuration, 11 checks in
+all); and a device-verified
 image, which is never claimed and always reads `NOT TESTED`. The test levels are L1
 (build), L2 (simulation), L3 (device) and L4 (module integration). No L1 to L4 test record
 exists in the registry. `kode_build` reports observed L1 evidence for the host that ran it,
@@ -282,12 +302,20 @@ and that is not recorded in the registry.
 
 What remains unverified:
 
-- Any real `idf.py build`: no ESP-IDF v6.1 was available when this slice was written.
+- A real `idf.py build` of the code in this branch as it now stands. One real build passed
+  on commit 46271fa (through `kode_build`, ESP-IDF v6.1.0 at `fff9895c`, template v0.1.0
+  built against SDK v0.1.1, 321 s, image 517680 bytes) and is described in the design
+  record. The fixes after that commit have been checked against that build directory by
+  one test; they have not been used to run a new build.
+- Running a preset-file attack through a real `idf.py`: the refusal is tested, and the
+  reading of idf.py comes from its v6.1 source.
+- The Kconfig reader is only modelled. See the design record for the open finding G2-1.
 - Anything on a physical Dot, including what board revision a retail unit reports. The SDK
   declares `KBSP_BOARD_REV "DVT"`, the only revision the profile knows.
 - All five modules. Electrical data, detection and qualification are `unknown` for each,
   and four module SDK repositories returned HTTP 404 on 13 November 2026.
-- A v0.1.0 template built against SDK v0.1.1.
+- A v0.1.0 template built against SDK v0.1.1 has built once (see above). The v0.1.0
+  template pinned to SDK v0.1.0 has not been built.
 - The raw flash offset conflict: the template README prints `0x1C00000` while the SDK
   partition table puts `app_pending` at `0x1A00000`. It is unresolved, no tool uses a raw
   offset, and `kode_new_app` does not copy that README.

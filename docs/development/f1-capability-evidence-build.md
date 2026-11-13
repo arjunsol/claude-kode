@@ -1,7 +1,8 @@
 # F1: capability registry, evidence and build-only pipeline
 
 **Status:** Implemented in a proposed PR (stacked on PR #4); tested on a Windows host with
-no device and no ESP-IDF; **NOT TESTED** on a physical Dot. Date: 13 November 2026.
+no device; one real ESP-IDF v6.1 build passed on commit 46271fa and has not been repeated on
+the code after it; **NOT TESTED** on a physical Dot. Date: 13 November 2026.
 Tracking issue: [CK-R003](https://github.com/arjunsol/claude-kode/issues/7). The
 specification it implements in part is the PR #6 proposal.
 
@@ -72,8 +73,8 @@ November. Every file the registry cites was compared between the two tags.
   are not implemented.
 - The v0.1.0 template pins kode-sdk v0.1.0. Its README names the `version:` line of
   `main/idf_component.yml` as the one edit to move SDK. `kode_new_app` makes that edit to
-  v0.1.1 by default. A v0.1.0 template built against SDK v0.1.1 is **NOT TESTED**: this
-  project has built nothing, because no ESP-IDF v6.1 was available.
+  v0.1.1 by default. A v0.1.0 template built against SDK v0.1.1 built once with a real
+  ESP-IDF v6.1 (PASS, see "Real ESP-IDF build"). Pinned to SDK v0.1.0 it is **NOT TESTED**.
 - The four module SDK repositories (kode-camera-sdk, kode-fck-sdk, kode-mesh-sdk,
   kode-robotics-sdk) still returned HTTP 404 on 13 November. The Maker module has no
   dedicated SDK listed.
@@ -111,7 +112,14 @@ without the evidence that earns it. Code: `mcp/src/registry/` (`types.ts`, `regi
   record that names the module and its revision. A simulated record cannot be L3 or L4. A
   record backs a physical claim only if it is for the same profile, a board revision in the
   claim's scope, the same module (for an L4 record on a module claim) and observed no later
-  than the claim's review date.
+  than the claim's review date and no later than the day the claim was recorded. A claim
+  scoped to board revisions needs a record for every revision in its scope, and every scoped
+  revision must be one the profile knows; an unscoped claim still needs one record on a known
+  revision. Dates must be real calendar dates. A claim recorded more than one calendar day
+  after the evaluation date (the day is for time zones) is not applicable, and the policy
+  detail says it is dated in the future. Every claim listed in a module's `claimIds` must have
+  the subject `module:<that module's id>`. A very old observation (the review used
+  1970-01-01) is still accepted: how old a record may be is a policy value nobody has set.
   No such record exists, so no claim has either state, and every module's electrical data,
   detection and qualification are `unknown`.
 - **Board revision.** The SDK declares `KBSP_BOARD_REV "DVT"`; that is the only revision the
@@ -194,7 +202,9 @@ Code: `mcp/src/build/`, `mcp/src/tools/build-tools.ts`.
 - **`kode_inspect_image`** keeps four stages apart: source project; compiled image
   (P4 chip id, app descriptor, project identity); kodeOS-install compatible (a source-level
   judgement: ESP-IDF v6.1, `KAPD` manifest with a display name of 1 to 31 characters and 1
-  to 4 catalogue categories, `KODEOS_BOOT_ROLE_APP`, P4 target, a generated
+  to 4 catalogue categories, `KODEOS_BOOT_ROLE_APP`, `KODEOS_HOME_HOLD` and `KQP_AO_WATCH`
+  both true in the resolved configuration (`app.home_hold`, `app.ao_watchdog`; absent, false,
+  a non-boolean or an unreadable `sdkconfig.json` fails them), P4 target, a generated
   `flasher_args.json` that is the single mailbox entry for a file named exactly
   `<name>.bin`, an image that fits the mailbox); and device verified, which is never
   claimed and always `NOT TESTED`. It reports `ok` and `verifiedLayer: build` only for an
@@ -215,19 +225,28 @@ rule ids begin `BL-`) requires:
 - `main/CMakeLists.txt` is a single `idf_component_register(...)` call in a small strict
   grammar (`BL-MAIN-CMAKE`);
 - no `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/`,
-  `sdkconfig.defaults.<x>` or file whose name starts with `Kconfig` (any letter case)
-  anywhere in the project outside `build/` and `managed_components/`
+  `sdkconfig.defaults.<x>`, `CMakePresets.json`, `CMakeUserPresets.json`,
+  `sdkconfig.rename`, `sdkconfig.rename.<x>` or file whose name starts with `Kconfig` (any
+  letter case) anywhere in the project outside `build/` and `managed_components/`
   (`BL-EXTRA-BUILD-FILE`), found by a walk bounded in depth and entries
   (`BL-WALK-BOUND`). The `Kconfig*` refusal is a precaution, not a demonstrated exploit:
   upstream kconfiglib has a preprocessor with a shell function, whether ESP-IDF's variant
-  runs it could not be checked because ESP-IDF is not installed, and the official template
-  has no Kconfig file;
+  runs it was not checked (ESP-IDF was not installed when the rule was written), and the official template
+  has no Kconfig file. The preset files are refused because idf.py reads them from the
+  project and passes the chosen preset to cmake (read in the ESP-IDF v6.1 source; the cmake
+  half was run, the idf.py half was not), and `sdkconfig.rename` because a rename line with
+  `!` inverts a protected setting (run with kconfgen alone, not through idf.py). The
+  other project-directory inputs idf.py reads in v6.1 (`idf_ext.py`, `CMakeLists.txt`,
+  `dependencies.lock`) were found already modelled;
 - no links at the top level or in `main/` and `appdata/` (`BL-LINK`);
 - a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target
   (`BL-SDKCONFIG`).
 
-In practice `kode_build` builds projects made by `kode_new_app` whose build logic has not
-been altered. Source files, `sdkconfig.defaults`, `appdata/` and the `SRCS` list remain the
+In practice `kode_build` builds projects made by `kode_new_app` whose build-logic files and
+other modelled build inputs have not been altered or added to. That is a claim about the
+inputs listed above; the review of the second fix round showed that the list was incomplete
+once (the preset files), and finding G2-1 below shows that the `sdkconfig.defaults` rules
+are not a complete model of Kconfig. Source files, `sdkconfig.defaults`, `appdata/` and the `SRCS` list remain the
 app author's to edit. A pre-existing `managed_components/` or `dependencies.lock` cannot be
 verified by the server and is reported as a warning (`BL-UNVERIFIABLE`) that does not make
 the project ineligible. The gate narrows what a build runs; it does not make the build a
@@ -269,16 +288,37 @@ After a restart every image is unattested until it is built again.
   child in a Windows Job Object without a native module. The timeout message says only that
   the attached processes were ended, says that a detached process cannot be tracked and may
   still be running, and says so when even the attached ending could not be confirmed.
+  `BUILD_TIMEOUT` is returned only when the build process itself had not exited at the
+  deadline. The runner also listens for the `exit` event: when the build process has exited
+  with a code but something it started still holds the output pipes, it waits 2000 ms for
+  normal output, stops reading, reports the exit code and sets `outputHeldOpen` (with a
+  sentence in the message, and on `BUILD_FAILED` after the log tail). It does not end the
+  holder. Before this change such a build was reported as a timeout.
 - `managed_components/` that is a link is refused before a build, and a file with more than
   one hard link is refused. A pre-existing `build/`, `sdkconfig` or `sdkconfig.old` is
-  refused whether or not it is a link (`BUILD_STATE_PRESENT`). The check-then-open race is
-  narrowed, not closed.
+  refused whether or not it is a link. The reason code depends on the form: a plain
+  existing entry (including a `sdkconfig.old` that is a directory, a file with an alternate
+  data stream or a different letter case) gives `BUILD_STATE_PRESENT`; a `build/` or `sdkconfig`
+  that is a junction, a dangling junction, the wrong kind of entry or a hard link gives
+  `WORKSPACE_ESCAPE`, because the entry check runs first; only a `sdkconfig.old` that is
+  a junction gives `BUILD_STATE_PRESENT`. Every form is refused before any process starts.
+  The check-then-open race is narrowed, not closed.
 - Rule C12 (flash and OTA calls) scans every text file under `main/` (no NUL byte in the
-  first 8 KiB) whatever its extension, within the depth, count and size bounds, joins
-  backslash-newline line splices before matching, and matches identifier families. It adds a
-  warning when a source under `main/` has an `#include` whose path contains `..`, because
-  files outside `main/` are not scanned. It is a source heuristic: token pasting or a
-  prebuilt library defeats it, and it is not a substitute for checking the built ELF.
+  first 8 KiB) whatever its extension, within the depth, count and size bounds, strips a
+  leading byte-order mark, treats CRLF and a lone CR as line breaks, joins a backslash
+  followed by spaces, tabs, form feeds or vertical tabs and a line break before matching, and
+  matches identifier families. It adds a warning (`C12-INCLUDE`) when a source under `main/`
+  has an `#include` (also spelt `%:`, `??=`, `include_next` or `import`, with form feed or
+  vertical tab around the `#`) whose operand leaves `main/`: a `..` path, an absolute path or
+  drive letter, a macro or other non-literal operand, or one that is not a well-formed
+  literal. Files outside `main/` are not scanned. Trigraph splices are not joined. It is a
+  source heuristic: token pasting or a prebuilt library defeats it, and it is not a
+  substitute for checking the built ELF.
+- The `sdkconfig.defaults` rules (app role B4, hold-BOT D8, watchdog C2-WATCH, B3, B7) read
+  every assignment in order. `# CONFIG_X is not set` counts as `n`, a lone CR is a line break,
+  an inline `#` comment is stripped from the value, and B4, D8 and C2-WATCH judge every
+  assignment rather than the last. B3 and B7 use the last value. This is a model of the
+  Kconfig reader and is incomplete (G2-1, below).
 - A parsed project text file over 64 KiB, or with a line over 4096 characters, is rejected
   (`CK-FILE-BOUND`) without being run through a regex. Values echoed from project files and
   from build metadata are capped at 64 characters, and `kode_inspect_image` reports at most
@@ -328,16 +368,25 @@ After a restart every image is unattested until it is built again.
 
 ## Test evidence
 
-Run on the Windows host that built the slice: Node 24.22.1, no device, no ESP-IDF
-installed.
+Run on the Windows host that built the slice: Node 24.22.1, no device. The unit tests use no
+ESP-IDF. A real ESP-IDF v6.1 was installed later in the work and is used by the real build
+below and by one optional test.
 
 | Check | Result |
 | --- | --- |
 | Before changes: MCP tests | PASS, 14 of 14 |
 | Before changes: Python setup tests | PASS, 13 of 13 |
 | `npm run build` | PASS, clean |
-| `npm test`, no template checkout | PASS: 163 tests, 162 pass, 0 fail, 1 skipped (the real-template test) |
-| `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 163 tests, 162 pass, 0 fail, 1 skipped (the "refused without a template" test); a real scaffold is created, pinned to SDK v0.1.1, passes validation, is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
+| `npm test`, no template checkout | PASS: 269 tests, 267 pass, 0 fail, 2 skipped (the real-template test and the real-build-directory test) |
+| `npm test`, `KODE_TEST_TEMPLATE_DIR` set to a real template v0.1.0 checkout | PASS: 269 tests, 267 pass, 0 fail, 2 skipped, as reported by the final run; a real scaffold is created, pinned to SDK v0.1.1, passes validation, is eligible to build, and becomes ineligible when `idf_ext.py` or an `execute_process` line is added |
+| `npm test` with the template and `KODE_TEST_REAL_BUILD_DIR` both set (run by the second gate) | PASS: 269 tests, 268 pass, 0 fail, 1 skipped (the no-template scaffold test); the real-build inspection test passes |
+| Python setup tests (`python -m unittest discover -s tests -v`) | PASS: 13 tests, OK |
+| Real `kode_build` of a scaffolded app on ESP-IDF v6.1.0 | PASS, once, on commit 46271fa; see "Real ESP-IDF build" below. Not repeated on the code after that commit |
+| Final code at the end of this work | Built and tested as above. It has had no new real `idf.py` build |
+
+The tests added since commit 46271fa are in three new files, `wf1-gate.test.ts`,
+`wf1-build-report.test.ts` and `wf1-registry.test.ts`, plus a changed helper
+(`mcp/test/helpers.ts`).
 
 Guard-breaking check (safety guards broken one at a time, each expected to turn the suite
 red):
@@ -355,16 +404,67 @@ red):
   refusal lists only reject-level findings, did not run in the harness because its
   multi-line anchor did not match the file's line endings; it was broken by hand instead and
   its test failed.
+- Fourth pass, on the fixes of this round: the first gate broke 24 guards one at a time and
+  all 24 turned tests red. The second gate ran 16 more checks (re-checks and the first gate's
+  fixes): 13 turned tests red and 3 stayed green, which are changes no test guards (G2-2,
+  below). Each file was restored and
+  checked by SHA-256, and the working tree was identical before and after. The
+  implementers also ran their new tests before their fixes and saw them fail (for example 25
+  of 49 gate tests and 7 of 12 registry tests).
 - After each pass every mutated file was confirmed restored.
 
 This check shows that each listed guard is covered by at least one test. It does not show
 that the list of guards is complete.
 
-NOT RUN: any real `idf.py build` (no ESP-IDF v6.1 on this host), anything on a physical Dot,
-any module, Claude Code plugin discovery, macOS or Linux, GitHub Actions.
+NOT RUN: anything on a physical Dot, any module, Claude Code plugin discovery, macOS or
+Linux (so the POSIX process-group kill path), GitHub Actions, a real `idf.py` run with a
+preset file in the project, GCC (the include and splice checks were compared with clang
+through zig cc only), and two `kode_build` calls on one project at the same time.
 
-The build service is tested with an injected runner. Those tests show the control flow and
-the single fixed command; they do not show that an ESP-IDF build succeeds.
+The build service is mostly tested with an injected runner. Those tests show the control
+flow and the single fixed command; they do not show that an ESP-IDF build succeeds. The
+real build, below, does, for one project on one host.
+
+### Real ESP-IDF build
+
+Result: **PASS** (`kode_build` itself returned `ok`). Run on commit 46271fa, before the
+fixes in this round, through the MCP tools in order, with no device attached.
+
+- Toolchain: ESP-IDF v6.1.0, commit `fff9895c82d744c7237be8847347bdd1b07c6643`, equal to the
+  pin; Python 3.13 environment created by the installer; Node 24.22.1. Template v0.1.0
+  (`9cfaa43b`), built against kode-sdk v0.1.1.
+- The worktree and the export used for the run were identical apart from line endings.
+- Run A used Node 22 by accident: build `ok` in 443 s, image sha256
+  `291667a6c73d3f6970d2aa2f4b023263a14df4667002e2d2123517fabccb7b6f`. Kept as evidence only.
+- Run B (Node 24, the authoritative run): `kode_get_toolchain_status` ok; `kode_new_app` ok;
+  `kode_validate` ok (verdict pass, one warning, build logic eligible); `kode_build` ok in
+  321 s, `reproduciblyPinned` true, log tail "Project build complete";
+  `kode_inspect_image` ok. Image `rb_app.bin`, 517680 bytes, sha256
+  `c7c127fee1e83ca3ffefec9a926ce2b6ca261eb43a05f0d91f40b4371a9e3c5b`. The two runs gave
+  different hashes; the run notes attribute this to an embedded build time, which was not
+  separately tested.
+- Inspection, on the code of that commit: source project true, compiled image true,
+  kodeOS-install compatible true, device verified false (NOT TESTED), stage
+  `kodeos_install_compatible`, chip esp32p4, flash plan `mailbox_only` at `0x1a00000` for
+  `rb_app.bin`, 9 of 9 checks pass. After the fixes the inspection has 11 checks; the
+  optional test `KODE_TEST_REAL_BUILD_DIR` runs the current code over this build directory
+  and it is install-compatible with every check passing.
+- A second `kode_build` without cleaning was refused with `BUILD_STATE_PRESENT`, as
+  designed. The server's stderr was empty. The scaffold's long path (about 150 characters)
+  did not break the build.
+- No pipeline defect was found, so no code change came from the build. Three installer
+  findings (environment class, not fixed here, because the installer belongs to the pull
+  request below this one):
+  1. The first run, with the default toolchain path under the state directory, failed in
+     `git clone` with "Filename too long" (Windows MAX_PATH, `core.longpaths` unset), exit 128.
+  2. A retry from Git Bash failed with "ERROR: MSys/Mingw is not supported" from
+     `idf_tools.py`.
+  3. `--firmware-only` rewrote the activation scripts without the Node 24 PATH line.
+  Workaround that passed: `KODE_TOOLCHAIN_ROOT=C:/kt`, and the same unmodified script run
+  from PowerShell.
+- Combinations still NOT TESTED: the v0.1.0 template pinned to SDK v0.1.0; building the same
+  project twice to learn what differs between images; a direct `idf.py build` (not needed,
+  as the MCP build passed); a build of the fixed code.
 
 ### Handover test requirements
 
@@ -390,6 +490,12 @@ Each row names the test file under `mcp/test/` and the test name.
 | Flash-call heuristic and parse bounds | `validate-build-logic.test.ts`: C12 sees the flash and OTA identifiers the review showed it missing; no parsed file can freeze the server; values echoed from a project file are capped at 64 characters; B1 and B2 are not fooled by the reviewer's inputs |
 | Uniform refusals and cautions | `expiry.test.ts`: every scope gate refuses as a tool error, for every knowledge tool; a refused compatibility decision is a tool error with the first reason code and the full payload; an allowed console read says in its message that opening the port resets the Dot; the SDK contract serves release-scoped facts only for their release, and console digests for every kodeOS release; `policy.test.ts`: an allowed console read carries the cautions |
 | Test records scoped to their claim | `registry.test.ts`: a test record backs only the claim it was taken for: profile, board revision, module and date |
+| Build inputs idf.py reads that the gate must refuse | `wf1-gate.test.ts` section A: `CMakePresets.json`, `CMakeUserPresets.json` (any letter case, also under `main/`), `main/sdkconfig.rename` and `main/sdkconfig.rename.esp32p4` are refused with `BL-EXTRA-BUILD-FILE`, and 5 controls stay eligible |
+| `sdkconfig.defaults` read as Kconfig reads it | `wf1-gate.test.ts` section B: the unset form, every assignment (`=n` then `=y`), a lone CR line break, a CR-only file, an inline `#` comment and the stock project, against D8, C2-WATCH, B4, B3 and B7. Open: G2-1 (not covered) |
+| C12 splices and the include warning | `wf1-gate.test.ts` section C: backslash with spaces, tab, form feed, CRLF or a lone CR before the line break; a BOM; form feed and vertical tab around `#`; CR-only line endings; absolute, drive-letter, backslash, macro, `%:`, `??=`, `include_next`, `import` and spaced includes warn; four plain includes do not |
+| Inspection reads the resolved configuration | `wf1-build-report.test.ts`: `KODEOS_HOME_HOLD` and `KQP_AO_WATCH` true gives install-compatible with 11 checks; absent, false or the string "true" in `sdkconfig.json` fails `app.home_hold` or `app.ao_watchdog` (3 tests each); a missing `sdkconfig.json` fails both; a real build directory (`KODE_TEST_REAL_BUILD_DIR`) inspects as install-compatible |
+| A finished build is not reported as a timeout | `wf1-build-report.test.ts`: exit 0 and exit 3 with the output held open are reported by exit code; a normal exit has no `outputHeldOpen`; a process that never exits is still a timeout with no exit code; `buildApp` carries the fact and the sentence for exit 0 and for `BUILD_FAILED` |
+| Registry scoping, dates and module claims | `wf1-registry.test.ts`: a scoped claim on an unknown revision is refused; a two-revision scope needs a record for each; a claim cannot be recorded before its observation; impossible dates are refused; a board claim or another module's claim under the maker module is refused; a future-recorded claim is not applicable and the detail says so; one day ahead is still applicable; the shipped registry loads and every shipped claim is applicable |
 | Unsupported module operations | `policy.test.ts`: module operations are refused: no SDK, no attachment proof, no L4 record; `protocol-f1.test.ts`: modules are catalogued, never detected, and unknown modules get no invented specification; `registry.test.ts`: module electrical data, detection and qualification are unknown for all five modules |
 
 ## Independent review before first push
@@ -457,18 +563,133 @@ than fixed: an identifier assembled by macro concatenation; a header outside `ma
 by a relative include (now reported by the `C12-INCLUDE` warning); flash-related functions
 outside the families C12 lists; and source placed under `appdata/`, which C12 does not scan.
 
-The second fix pass was written by the same kind of agent as the first and was not given a
-further independent adversarial review. The confirmation scripts show the demonstrated
-bypasses are closed; they do not show that no other bypass exists.
+The second fix pass was written by the same kind of agent as the first. At the time of the
+confirmation pass it had no independent adversarial review; it has one now (next section).
+The confirmation scripts showed the demonstrated bypasses closed; they did not show that no
+other bypass exists, and the next review found some.
+
+### Independent review of the second fix round
+
+A further independent review read the code at commit 46271fa and tried to break each claim
+of the second fix round, by running scripts (r1 to r8) against the real kode-app-template and
+the real pinned template list, with Node 24.22.1 and `tsx` over `src/`. Where a finding
+depended on ESP-IDF behaviour it read the ESP-IDF v6.1.0 source; it also ran cmake 3.29.2 and
+a clang preprocessor (zig cc) on their own. It found 7 problems: 1 high, 1 medium and 5 low.
+It did not run `npm run build` or `npm test`, and it left the worktree clean.
+
+Claims that held: clean build (13 forms of `build/`, `sdkconfig`, `sdkconfig.old`, none
+started a process), receipts (a byte change to either metadata file, or a deleted one,
+gives not observed), image inspection (18 cases) and project names (25 names). The review
+found nothing that the second fix round broke.
+
+| # | Severity | Finding | What was done |
+|---|---|---|---|
+| F1 | high | `CMakePresets.json` and `CMakeUserPresets.json` in the project root passed the gate. In the ESP-IDF v6.1 source, idf.py loads them and passes `--preset` to cmake, and cmake run alone with the same arguments ran a file named by the preset. The README sentence "build logic has not been altered" was untrue | Fixed: refused at any depth. Closed by both gates. The idf.py half is from source reading, not run |
+| F2 | medium | `# CONFIG_X is not set` in `sdkconfig.defaults` was not read, so hold-BOT or the watchdog could be turned off and a later `KODEOS_BOOT_ROLE_OS=y` passed B4; a build then reported install-compatible | Fixed for the reported inputs (static rules, plus the resolved-configuration checks). Partly open: see G1-1 and G2-1 |
+| F3 | low | The include warning missed absolute, macro and digraph includes; a backslash-space-newline splice was not joined | Fixed for the reported inputs. Neighbours found by the gates, G1-2, fixed |
+| F4 | low | A build that exited 0 was reported as `BUILD_TIMEOUT` when a detached child held the output pipes | Fixed: the exit event is used. The rerun gave exit code 0 after about 2.1 s |
+| F5 | low | SKILL.md and `/new-kode-app` said `BUILD_TIMEOUT` meant the processes were ended; the code also returns it when ending was not confirmed | Documentation corrected |
+| F6 | low | Registry: (a) a scoped claim on an unknown revision, (b) an observation after the claim was recorded, (c) a 1970 observation, (d) a board claim under a module were accepted | (a), (b), (d) fixed, and a claim recorded in the future is not applicable. (c) is not fixed: needs an owner decision |
+| F7 | low | This record named `BUILD_STATE_PRESENT` for a linked `build/` or `sdkconfig`; the code gives `WORKSPACE_ESCAPE` | Documentation corrected; no safety effect |
+
+Before the fixes the planner also found, by running kconfgen 3.14.0 alone, that a
+`main/sdkconfig.rename` line with `!` inverts a protected setting (`KODEOS_HOME_HOLD`
+resolved to false). The review had judged that file harmless. It is refused now.
+
+The fixes were made in three packages (build gate and static rules; what a build reports;
+registry), then checked by two gates (a gate is a further independent review of the changed
+code).
+
+**Gate 1** (re-ran the review's scripts; broke 24 guards): F1 and F4 closed; F2, F3 and F6
+partly closed; F5 and F7 were documentation items. New findings:
+
+- G1-1 (medium): `sdkconfig.defaults` was still not read as kconfgen reads it. A lone CR is a
+  line break and an inline ` # comment` is stripped (both run with kconfgen 3.14.0). Inputs
+  such as `# note<CR>CONFIG_KODEOS_HOME_HOLD=n` passed D8, C2-WATCH, B4, B3 and B7.
+- G1-2 (low): C12 missed a CR-only splice, and the include warning missed a BOM, form feed
+  or vertical tab, and CR-only line endings.
+- G1-3 (low): a claim made not applicable by the new future-date rule was refused with a
+  detail naming a different release or revision.
+
+A fix round closed G1-1 and G1-2 as reported, and G1-3, and found one more bypass of its
+own (a name after a CR-only `//` comment was hidden); all have tests. After that,
+`npm test` gave 269 tests, 267 pass, 0 fail, 2 skipped.
+
+**Gate 2** (on the final code; read it; 16 guard checks): F1, F3, F4, G1-2 and G1-3 closed;
+F2, F6 and G1-1 partly closed. New findings:
+
+- G2-1 (medium, open): lines that kconfgen reads differently from the validator still pass.
+  Run with kconfgen 3.14.0: Python `strip()` removes control bytes 0x1C to 0x1F and U+0085;
+  a bool value of `no` or empty reads as n; kconfgen ignores `CONFIG_X =v`,
+  `#  CONFIG_X  is not set` (extra spaces), lines inside a deprecated-options block and an
+  assignment after `# default:`. B3 and B7 are fully bypassed (for example
+  `CONFIG_KODEOS_RADIO=no` with `ESP_HOSTED_ENABLED=y`, or a `mine.csv` partition table
+  name that the validator hides), and with synthetic outputs `kode_build` reached
+  `kodeos_install_compatible` for them. D8, C2-WATCH and B4 are bypassed by the static rules
+  only; the resolved-configuration checks catch them after the build has run. The validator's
+  own comment that "reading wider can only refuse more" is false for the last-value rules B3
+  and B7. The gate's suggested fix is to refuse any line that is not a plain comment, blank,
+  or an exact assignment, or to add resolved-configuration checks for B3 and B7. Not done.
+- G2-2 (low): the changes that split `idf_component.yml` scans on every line break, and the
+  reworded not-found message in `kode_get_evidence`, are guarded by no test. Reverting them
+  left the suite green. With the scan change reverted, a lone-CR `override_path` passes
+  rule B1 again, although `BL-SDK-PIN` still refuses the build. Not fixed.
+
+State of the review items at the end of this work: closed F1, F3, F4, F5 (documentation),
+F7 (documentation), G1-2, G1-3. Open: F2 and G1-1 (both fall under G2-1), F6 part c, G2-1,
+G2-2. The last gate checked the final code, and this record was written after it.
+
+Deferred, with the reason:
+
+- F6 part c (a very old observation backs a claim): the age limit is a policy value
+  nobody has set, and proposed ADR-0011 says no arbitrary threshold is to be invented.
+  The shipped registry has no physical records. Owner decision.
+- An L1 host-build record in the registry for the real build: not added. The record shape
+  needs a board revision (`board.profileId` and `board.revision`), and
+  `kode_get_evidence` states that no L1 to L4 record exists. Owner decision.
+- An unscoped physical claim reads as proof for every revision the profile knows. Latent,
+  because the profile knows one revision (DVT). Not changed.
+- Installer hardening (long paths, Git Bash refusal, the Node line in activation scripts):
+  `scripts/setup_environment.py` belongs to the pull request below this one.
+- The manufacturer's catalogue checker (`kcheck` rules C and D) compares only with `n`, so
+  it has the same "is not set" gap. It is upstream GPL code; nothing was copied. After
+  these fixes this server is stricter than the checker on those two rules.
+- Not tested by the review: a real `idf.py` run with a preset file; `esp-idf-kconfig`
+  behaviour was later run with kconfgen alone; the component manager's use of a planted
+  `dependencies.lock`; `build/flash_args` (idf.py flash reads it; receipts and inspection
+  do not); the POSIX kill path; two builds at once; `fsutil setshortname` (needs admin).
+  A `flasher_args.json` over 256 KiB is refused with the reason code `VALIDATION_FAILED`,
+  a misleading name; not changed.
 
 ### Residual risks
 
 - `kode_build` is not a sandbox. The SDK's own build scripts run, the component manager
   fetches the SDK by tag, and a pre-existing `managed_components/` or `dependencies.lock`
-  cannot be verified (`BL-UNVERIFIABLE`). The first defect was never reproduced because
-  ESP-IDF is not installed on the host that wrote the slice.
-- Rule C12 is a source heuristic. Token pasting or a prebuilt library defeats it, and it is
-  not a substitute for checking the built ELF.
+  cannot be verified (`BL-UNVERIFIABLE`). The first defect was never reproduced through
+  idf.py; the preset bypass (F1) was reproduced with cmake alone and its idf.py half read
+  from source. A real ESP-IDF is now installed on the development host, so this can be run.
+- The gate is a list of the project inputs ESP-IDF v6.1 reads, and the first review of the
+  second round found the list incomplete once. Other inputs may exist. Inputs driven by the
+  operator's environment (`IDF_EXTRA_ACTIONS_PATH`, `SDKCONFIG_DEFAULTS`, `EXTRA_CFLAGS`,
+  `IDF_EXTENSION_ALLOW_UNTRUSTED`) are outside what MCP can set and are not modelled.
+- **Open (G2-1, medium):** the `sdkconfig.defaults` rules are a model of Kconfig's reader,
+  not the reader. Inputs that kconfgen reads differently still bypass B3 (partition table)
+  and B7 (radio and hosted) completely, and bypass D8, C2-WATCH and B4 until a build has
+  run and inspection reads the resolved configuration. An image built from such a project
+  can still be reported install-compatible for B3 and B7.
+- **Open (G2-2, low):** two changes have no test (see above).
+- **Open (F6 part c):** an old test record still backs a physical claim until the owner sets
+  a maximum age. The shipped registry has no physical records.
+- Rule C12 is a source heuristic. Token pasting, trigraph splices, a prebuilt library and
+  includes the heuristic cannot see defeat it, and it is not a substitute for checking the
+  built ELF. It was compared with clang, not GCC.
+- A build can still report a stage from files whose resolved configuration was checked for
+  only three settings (app role, hold-BOT, watchdog).
+- `build/flash_args`, which `idf.py flash` reads, is outside the receipts and the
+  inspection. The server never flashes.
+- Two `kode_build` calls on one project at once, and the POSIX process-group kill path,
+  were not tested.
+- One real build passed (commit 46271fa); the code after it has not been built for real.
 - Build receipts last only for the server process. After a restart every image is
   unattested until it is rebuilt.
 - A process that detaches itself outlives a timed-out build. The deadline ends the build
@@ -485,16 +706,26 @@ bypasses are closed; they do not show that no other bypass exists.
 
 ## Manual validation checklist
 
-Nothing below has been done. Each item needs a person with the stated hardware or host.
+Items marked done were done by the workflow on the development host, on commit 46271fa, and
+are not a person's validation on a device. Everything else has not been done and needs a
+person with the stated hardware or host.
 
-- [ ] Install ESP-IDF v6.1 (commit `fff9895c82d744c7237be8847347bdd1b07c6643`), activate it,
-      and run `kode_get_toolchain_status`; confirm `idfCommitMatchesPin` is true.
-- [ ] Set `KODE_WORKSPACE_ROOT`, `KODE_TEMPLATE_DIR` and `KODE_ENABLE_BUILD=1`; run
-      `kode_new_app`, `kode_validate`, `kode_build` and `kode_inspect_image` on a real project
-      and keep the log and the image digest.
-- [ ] Build a scaffolded project against kode-sdk v0.1.1, and separately against v0.1.0, and
-      record the result of each. A v0.1.0 template built against v0.1.1 has not been built.
-- [ ] Confirm the generated `flasher_args.json` is the single mailbox entry on a real build.
+- [x] Install ESP-IDF v6.1 (commit `fff9895c82d744c7237be8847347bdd1b07c6643`), activate it,
+      and run `kode_get_toolchain_status`: done; the commit matches the pin. Run the
+      installer from PowerShell with a short `KODE_TOOLCHAIN_ROOT` such as `C:/kt`.
+- [x] Set the host variables; run `kode_new_app`, `kode_validate`, `kode_build` and
+      `kode_inspect_image` on a real project: done once, image digest
+      `c7c127fe...9e3c5b` (full value above). Repeat on the final commit: not done.
+- [ ] Build a scaffolded project against kode-sdk v0.1.0 (the v0.1.0 template against SDK
+      v0.1.1 is done, once).
+- [x] Confirm the generated `flasher_args.json` is the single mailbox entry on a real build:
+      the inspection reported `mailbox_only` at `0x1a00000` for `rb_app.bin`.
+- [ ] Rebuild the unmodified template on the fixed code and check 11 of 11 inspection checks
+      (the optional test covers the existing build directory only).
+- [ ] Run the CMake preset attack through a real `idf.py` with a harmless marker file, to
+      move F1 from "read in source" to "executed". Build only, no device.
+- [ ] Decide on G2-1: refuse every `sdkconfig.defaults` line that is not modelled, or check
+      B3 and B7 in the resolved configuration.
 - [ ] On a physical production Dot: read the board revision, serial and installed kodeOS
       release, and compare them with the registry's `DVT` and assessed releases.
 - [ ] Confirm what opening the serial port does to the Dot, then exercise the four console

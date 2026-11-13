@@ -93,7 +93,8 @@ carrying its first reason code.
 
 **Install-compatible image:** An image whose source-level properties match the
 kodeOS app contract (P4 chip id, app descriptor, ESP-IDF v6.1, `KAPD` manifest,
-app boot role, a manifest name of 1 to 31 characters and 1 to 4 catalogue
+app boot role, hold-BOT and the Active Object watchdog on in the resolved
+configuration, a manifest name of 1 to 31 characters and 1 to 4 catalogue
 categories, a single mailbox entry for `<name>.bin` in `flasher_args.json`, an
 image that fits the mailbox). It is one of four stages `kode_inspect_image` keeps apart: source project,
 compiled image, install-compatible image and device-verified image. The last is
@@ -110,8 +111,9 @@ project's CMake and would import a project `idf_ext.py`. `kode_validate`
 reports it separately from the verdict as `buildLogic` (rule ids `BL-...`), and
 a project that fails it is refused with `BUILD_LOGIC_NOT_PINNED`. Source files,
 `sdkconfig.defaults`, `appdata/` and the `SRCS` list stay the author's to edit.
-It also refuses any file whose name starts with `Kconfig`, as a precaution rather
-than a demonstrated exploit. It narrows what a build runs; a build is still not a
+It also refuses CMake preset files (`CMakePresets.json`, `CMakeUserPresets.json`),
+`sdkconfig.rename` files and any file whose name starts with `Kconfig`; the
+`Kconfig*` rule is a precaution rather than a demonstrated exploit. It narrows what a build runs; a build is still not a
 sandbox.
 
 **Clean build:** The rule that `kode_build` starts from a project with no `build/`,

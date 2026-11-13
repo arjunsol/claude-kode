@@ -51,8 +51,11 @@ assessed previous release and any other release is refused.
    `kode_build` will accept the project. A project can pass the verdict and be
    ineligible to build. The flash-call rule (C12) is a source heuristic, not a
    guarantee about the built ELF: it scans every text file under `main/`,
-   joins backslash-newline splices, and warns about an `#include` that leaves
-   `main/`, because files outside `main/` are not scanned.
+   joins backslash splices (also with spaces, tabs, CRLF or a lone CR), and
+   warns about an `#include` that leaves `main/` (a `..` path, an absolute path,
+   a macro or other non-literal operand, `%:` and `??=` spellings, `include_next`
+   and `import`), because files outside `main/` are not scanned. Trigraph
+   splices are not joined.
 6. `kode_build` needs `KODE_ENABLE_BUILD=1`, `KODE_IDF_PATH`, `KODE_IDF_PYTHON`
    and a server started from an activated ESP-IDF v6.1 environment. It runs
    exactly `<KODE_IDF_PYTHON> <KODE_IDF_PATH>/tools/idf.py -C <project> -B
@@ -64,15 +67,19 @@ assessed previous release and any other release is refused.
    build logic is the pinned template's and refuses the rest with
    `BUILD_LOGIC_NOT_PINNED`. For a project you intend to build, do not add an
    `idf_ext.py`, extra `*.cmake` or `CMakeLists.txt` files, a `components/`
-   directory, `sdkconfig.defaults.<x>` or `Kconfig*` files (the last a
-   precaution, not a demonstrated exploit), and do not alter the root
+   directory, `sdkconfig.defaults.<x>`, `CMakePresets.json`,
+   `CMakeUserPresets.json`, `sdkconfig.rename` files or `Kconfig*` files (the
+   last a precaution, not a demonstrated exploit), and do not alter the root
    `CMakeLists.txt` or `main/idf_component.yml`. Source files,
    `sdkconfig.defaults`, `appdata/` and the `SRCS` list in `main/CMakeLists.txt`
    are yours to edit. A pre-existing `managed_components/` or
    `dependencies.lock` cannot be verified (`BL-UNVERIFIABLE`, a warning that
    `kode_build` repeats in its result). If the build runs past its deadline,
-   the build process and what is still attached to it are ended; a process that
-   detached itself cannot be tracked and may still be running.
+   the build process and what is still attached to it are ended (or the message
+   says that ending them was not confirmed); a process that detached itself
+   cannot be tracked and may still be running. A build whose process exited is
+   reported by its exit code, with `outputHeldOpen: true` if something it
+   started still held the output open.
 
    Every build starts clean. `kode_build` refuses with `BUILD_STATE_PRESENT`
    while `build/`, `sdkconfig` or `sdkconfig.old` exists, because state that
