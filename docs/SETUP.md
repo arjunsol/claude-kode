@@ -1,6 +1,6 @@
 # Development environment setup
 
-These launchers prepare the source checkout for development on Windows, macOS or
+> **Production SDK update — 13 November 2026:** Kode's public `kode-sdk v0.1.0` requires **ESP-IDF v6.1**. The installer pin and this guide have been updated from the earlier 6.0.1 experiment, but no clean v6.1 install or P4 firmware build was executed in this environment. The previous host-only and network-failure results do **not** qualify the new firmware setup. The optional read-only MCP console is documented in [mcp/README.md](../mcp/README.md).\n\nThese launchers prepare the source checkout for development on Windows, macOS or
 Linux. They install per-user tools, build/test the MCP prototype and prepare the
 pinned P4 firmware toolchain. They do not flash, open serial ports, change system
 packages or install the plugin into Claude Code automatically.
@@ -46,7 +46,7 @@ Default setup runs:
 
 1. Node selection/bootstrap with verified official distribution checksums.
 2. `npm ci`, TypeScript compilation, six MCP tests and the Python test suite.
-3. ESP-IDF **6.0.1**, exact commit `8c19b156084a0753687347cca1f5355782893533`,
+3. ESP-IDF **6.1**, exact commit `fff9895c82d744c7237be8847347bdd1b07c6643`,
    with its pinned submodules, P4 compiler/debug tools, CMake and Ninja.
 4. The official constrained IDF Python setup and dependency check.
 5. Activation files written only after the selected setup mode succeeds.
@@ -155,10 +155,8 @@ runtime access. Do not bypass the official constraints to obtain a passing run.
 
 ## Verified scope
 
-On this Linux instance, the official Node bootstrap download/checksum/extraction
-and actual host-only launcher passed. Six MCP tests and thirteen Python tests ran.
-Firmware-only setup reuses the installed SDK/tools and fails at the diagnosed
-constraints access check. No full firmware build passed.
+On an earlier Linux instance, the Node 24 host-only launcher passed **before** the ESP-IDF v6.1 change. Re-run all host/firmware checks for the updated branch. Six MCP tests and thirteen Python tests ran.
+The earlier firmware-only setup at v6.0.1 failed on the official constraints fetch; the new **v6.1** firmware path has not been run and must not be claimed verified. No full firmware build passed.
 
 Windows/macOS execution has not been validated locally. The included
 [workflow](../.github/workflows/setup.yml) retains manual host checks for all three
