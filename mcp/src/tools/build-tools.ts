@@ -1,0 +1,192 @@
+/** Build-only firmware pipeline tools: scaffold, validate, build, inspect.
+ * No tool here writes to a device, and none takes a path, a command, a flash
+ * offset or an approval as an argument.
+ */
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { buildApp } from '../build/build.js';
+import { inspectImage } from '../build/image.js';
+import { newApp } from '../build/scaffold.js';
+import { validateProject } from '../build/validate.js';
+import { hostConfig } from '../build/workspace.js';
+import { PINNED } from '../registry/sdk-contract.js';
+import { makeResult, resultSchema, toToolResult, type KodeResult, type ReasonCode } from '../result.js';
+import { refusalResult, releaseSchema, type KodeDeps } from './context.js';
+
+/** Anything that is not a valid name reaches the service, which refuses it with
+ * PROJECT_NAME_INVALID. The bound only keeps hostile input small. */
+const projectName = z.string().min(1).max(128);
+const projectInput = z.object({ projectName }).strict();
+
+const stageNote = 'Stages are separate: a source project, a compiled image, an image compatible with kodeOS installation, and an image verified on a device. This tool never reports the last.';
+const BUILD_CLAIMS = ['sdk.release.pinned', 'sdk.idf.version', 'sdk.app.boot_role', 'sdk.app.manifest'];
+
+const newAppInput = z.object({
+  projectName,
+  displayName: z.string().min(1).max(64),
+  categories: z.array(z.string().min(1).max(32)).min(1).max(8),
+  version: z.string().max(16).optional(),
+  description: z.string().max(128).optional(),
+  sdkRelease: releaseSchema.optional(),
+}).strict();
+const newAppPayload = z.object({
+  projectName: z.string(), stage: z.literal('source_project'), licence: z.literal('GPL-3.0-or-later'),
+  template: z.object({ repository: z.string(), tag: z.string(), commit: z.string(), lineEndingsNormalised: z.boolean() }).strict(),
+  sdk: z.object({ release: z.string(), templatePinned: z.string(), pinChanged: z.boolean(), note: z.string() }).strict(),
+  files: z.array(z.object({ path: z.string(), sha256: z.string(), origin: z.enum(['template', 'template_edited', 'generated']) }).strict()),
+  notCopied: z.array(z.string()),
+  manifest: z.object({ displayName: z.string(), categories: z.array(z.string()), version: z.string() }).strict(),
+}).strict();
+
+const findingSchema = z.object({ rule: z.string(), level: z.enum(['reject', 'warn']), status: z.enum(['pass', 'fail']), message: z.string() }).strict();
+const validatePayload = z.object({
+  projectName: z.string(), stage: z.literal('source_project'), verdict: z.enum(['pass', 'fail']),
+  findings: z.array(findingSchema), rejectsFailed: z.number(), warnings: z.number(),
+  manifest: z.object({ displayName: z.string(), categories: z.array(z.string()) }).strict().optional(),
+  version: z.string().optional(), sdkRelease: z.string().optional(),
+  rulesNotChecked: z.array(z.string()),
+}).strict();
+
+const inspectionSchema = z.object({
+  projectName: z.string(),
+  artefact: z.object({ path: z.string(), sizeBytes: z.number(), sha256: z.string() }).strict(),
+  header: z.object({ chipId: z.number(), chip: z.string(), segments: z.number() }).strict(),
+  appDescriptor: z.object({
+    projectName: z.string(), version: z.string(), idfVersion: z.string(), buildDate: z.string(), buildTime: z.string(),
+  }).strict().optional(),
+  manifest: z.object({ version: z.number(), displayName: z.string(), categories: z.array(z.string()) }).strict().optional(),
+  buildMetadata: z.object({
+    bootRoleApp: z.boolean().nullable(), configuredTarget: z.string().nullable(),
+    flashPlan: z.enum(['mailbox_only', 'not_mailbox_only', 'unreadable']),
+    flashEntries: z.array(z.object({ offset: z.string(), file: z.string() }).strict()),
+  }).strict(),
+  size: z.object({
+    mailboxMax: z.number(), fitsMailbox: z.boolean(), catalogueMax: z.number(), fitsCatalogue: z.boolean(), appsRegion: z.number(),
+  }).strict(),
+  checks: z.array(z.object({ id: z.string(), pass: z.boolean(), detail: z.string() }).strict()),
+  stages: z.object({
+    sourceProject: z.literal(true), compiledImage: z.boolean(), kodeosInstallCompatible: z.boolean(), deviceVerified: z.literal(false),
+  }).strict(),
+  stage: z.enum(['source_project', 'compiled_image', 'kodeos_install_compatible']),
+  deviceVerification: z.literal('NOT TESTED'),
+}).strict();
+
+const buildPayload = z.object({
+  projectName: z.string(),
+  stage: z.enum(['source_project', 'compiled_image', 'kodeos_install_compatible']),
+  command: z.object({ program: z.literal('KODE_IDF_PYTHON'), arguments: z.array(z.string()) }).strict(),
+  toolchain: z.object({
+    idfVersion: z.string(), idfCommit: z.string().nullable(), idfCommitMatchesPin: z.boolean().nullable(), sdkRelease: z.string().nullable(),
+  }).strict(),
+  reproduciblyPinned: z.boolean(),
+  validation: z.object({ verdict: z.enum(['pass', 'fail']), warnings: z.number() }).strict(),
+  inspection: inspectionSchema,
+  logTail: z.string(),
+  evidence: z.object({ level: z.literal('L1'), result: z.literal('passed'), note: z.string() }).strict(),
+}).strict();
+
+const DEVICE_GATES = [
+  'An observed identity of the target Dot, including its installed kodeOS release.',
+  'A verified install route and a validated recovery procedure.',
+  'An independent authorisation bound to this exact image digest.',
+];
+
+function inspectionResult(tool: string, inspection: z.infer<typeof inspectionSchema>): {
+  status: KodeResult<unknown>['status']; reasonCode: ReasonCode; message: string;
+} {
+  if (inspection.header.chip !== 'esp32p4') {
+    return { status: 'refused', reasonCode: 'IMAGE_CHIP_MISMATCH',
+      message: `The image is built for ${inspection.header.chip}, not the ESP32-P4. It must never be installed on a production Dot.` };
+  }
+  if (inspection.stages.kodeosInstallCompatible) {
+    return { status: 'ok', reasonCode: 'OK',
+      message: 'The image matches the kodeOS app contract as read from source. It has not been installed or run on any device.' };
+  }
+  const failed = inspection.checks.filter(check => !check.pass).map(check => check.id).join(', ');
+  return { status: 'not_verified', reasonCode: 'IMAGE_NOT_INSTALL_COMPATIBLE',
+    message: `${tool === 'kode_build' ? 'The build produced an image, but it' : 'The image'} does not meet the kodeOS app contract (failed: ${failed}).` };
+}
+
+export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
+  const evidence = () => deps.registry.evidenceRefs(
+    BUILD_CLAIMS.map(id => deps.registry.getClaim(id)).filter(claim => claim !== undefined));
+
+  server.registerTool('kode_new_app', {
+    title: 'Scaffold a kodeOS app',
+    description: `Create a new app project in the operator's configured workspace from the operator's checkout of the official template, verified against ${PINNED.template.repository} ${PINNED.template.tag}. Pins kode-sdk ${PINNED.sdk.tag} unless another assessed release is named. Never overwrites, never builds, never touches a device. The project is GPL-3.0-or-later.`,
+    inputSchema: newAppInput, outputSchema: resultSchema(newAppPayload),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, async input => {
+    const tool = 'kode_new_app';
+    try {
+      const request: Parameters<typeof newApp>[1] = {
+        projectName: input.projectName, displayName: input.displayName, categories: input.categories,
+      };
+      if (input.version !== undefined) request.version = input.version;
+      if (input.description !== undefined) request.description = input.description;
+      if (input.sdkRelease !== undefined) request.sdkRelease = input.sdkRelease;
+      const outcome = await newApp(hostConfig(deps.env), request);
+      return toToolResult(makeResult({
+        tool, effectClass: 'H1', status: 'ok', reasonCode: 'OK',
+        message: `Created source project ${outcome.projectName}. It is a source project only: nothing was built or installed.`,
+        verifiedLayer: 'source', payload: outcome, evidence: evidence(),
+        requiredNextEvidence: ['kode_validate, then an observed ESP-IDF v6.1 build (L1).'],
+      }));
+    } catch (error) { return toToolResult(refusalResult(tool, 'H1', error)); }
+  });
+
+  server.registerTool('kode_validate', {
+    title: 'Validate a kodeOS app project',
+    description: 'Statically check a workspace project against the pinned SDK contract and the catalogue rules that source alone can decide: identity, ESP32-P4 target, app role, SDK pin, manifest, forbidden flash calls. Lists the rules it cannot check. Reads files only.',
+    inputSchema: projectInput, outputSchema: resultSchema(validatePayload),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async input => {
+    const tool = 'kode_validate';
+    try {
+      const outcome = await validateProject(hostConfig(deps.env), input.projectName);
+      const passed = outcome.verdict === 'pass';
+      return toToolResult(makeResult({
+        tool, effectClass: 'H0', status: passed ? 'ok' : 'not_verified', reasonCode: passed ? 'OK' : 'VALIDATION_FAILED',
+        message: passed
+          ? `${outcome.projectName} passes the static checks (${outcome.warnings} warning(s)). This is not the catalogue's own checker and proves nothing about a build or a device.`
+          : `${outcome.projectName} fails ${outcome.rejectsFailed} static check(s) and must not be built for a production Dot as it stands.`,
+        verifiedLayer: 'source', payload: outcome, evidence: evidence(),
+        requiredNextEvidence: passed ? ['An observed ESP-IDF v6.1 build (L1).'] : ['Fix the failed checks and validate again.'],
+      }));
+    } catch (error) { return toToolResult(refusalResult(tool, 'H0', error)); }
+  });
+
+  server.registerTool('kode_build', {
+    title: 'Build a kodeOS app (build only)',
+    description: `Run the fixed command "idf.py build" for a workspace project with the configured ESP-IDF v6.1, after validation. Build only: there is no flash, install, erase or monitor path. Runs project and SDK build scripts on the host and fetches the pinned SDK, so the operator must enable it. ${stageNote}`,
+    inputSchema: projectInput, outputSchema: resultSchema(buildPayload),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async input => {
+    const tool = 'kode_build';
+    try {
+      const outcome = await buildApp(hostConfig(deps.env), input.projectName, deps.runBuild);
+      const summary = inspectionResult(tool, outcome.inspection);
+      return toToolResult(makeResult({
+        tool, effectClass: 'H1', ...summary, verifiedLayer: 'build', payload: outcome, evidence: evidence(),
+        artefactSha256: outcome.inspection.artefact.sha256, requiredNextEvidence: DEVICE_GATES,
+      }));
+    } catch (error) { return toToolResult(refusalResult(tool, 'H1', error)); }
+  });
+
+  server.registerTool('kode_inspect_image', {
+    title: 'Inspect a built app image',
+    description: `Parse a workspace project's built image and build metadata: target chip, ESP-IDF app descriptor, KODE_APP_MANIFEST, boot role, generated flash plan, size and SHA-256. ${stageNote} Reads files only.`,
+    inputSchema: projectInput, outputSchema: resultSchema(inspectionSchema),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async input => {
+    const tool = 'kode_inspect_image';
+    try {
+      const inspection = await inspectImage(hostConfig(deps.env), input.projectName);
+      const summary = inspectionResult(tool, inspection);
+      return toToolResult(makeResult({
+        tool, effectClass: 'H0', ...summary, verifiedLayer: 'build', payload: inspection, evidence: evidence(),
+        artefactSha256: inspection.artefact.sha256, requiredNextEvidence: DEVICE_GATES,
+      }));
+    } catch (error) { return toToolResult(refusalResult(tool, 'H0', error)); }
+  });
+}

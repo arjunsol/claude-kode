@@ -5,6 +5,8 @@ import { KodeConsoleError, readKodeConsole, type KodeReadOperation } from './kcl
 const noArguments = z.object({}).strict();
 const caution = 'A USB serial connection may reset the Dot. Requires explicit KODE_ENABLE_CONSOLE_READS=1 and a pinned manufacturer console. Never installs, flashes or controls radios/motors.';
 
+export const readonlyToolNames = ['kode_ping', 'kode_boot_info', 'kode_list_apps', 'kode_capture_screen'] as const;
+
 export function registerReadOnlyKodeTools(server: McpServer): void {
   for (const [name, op, description] of [
     ['kode_ping', 'ping', 'Check liveness with the official console.'],

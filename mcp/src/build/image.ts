@@ -1,0 +1,190 @@
+/** kode_inspect_image: read a built image and its build metadata and say, with
+ * the checks shown, which stage the artefact has actually reached.
+ *
+ * Stages are separate facts and are never inferred from one another:
+ *   1. source project       - a project directory exists
+ *   2. compiled image       - a well-formed ESP32-P4 image with the expected identity
+ *   3. kodeOS-install compatible - app role, manifest, size and flash plan match
+ *                             the pinned SDK contract (a source-level judgement)
+ *   4. device verified      - never claimed here; needs a recorded L3 run
+ */
+import { createHash } from 'node:crypto';
+import { KodeRefusal } from '../result.js';
+import {
+  CATALOGUE_IMAGE_MAX, CHIP_IDS, IMAGE, MAILBOX, PARTITIONS, REQUIRED_CHIP,
+} from '../registry/sdk-contract.js';
+import { isSupportedIdf } from '../registry/policy.js';
+import { readInside, readTextInside, requireProject, type HostConfig } from './workspace.js';
+
+export type ImageCheck = { id: string; pass: boolean; detail: string };
+
+export type ImageInspection = {
+  projectName: string;
+  artefact: { path: string; sizeBytes: number; sha256: string };
+  header: { chipId: number; chip: string; segments: number };
+  appDescriptor?: { projectName: string; version: string; idfVersion: string; buildDate: string; buildTime: string };
+  manifest?: { version: number; displayName: string; categories: string[] };
+  buildMetadata: {
+    bootRoleApp: boolean | null;
+    configuredTarget: string | null;
+    flashPlan: 'mailbox_only' | 'not_mailbox_only' | 'unreadable';
+    flashEntries: Array<{ offset: string; file: string }>;
+  };
+  size: { mailboxMax: number; fitsMailbox: boolean; catalogueMax: number; fitsCatalogue: boolean; appsRegion: number };
+  checks: ImageCheck[];
+  stages: {
+    sourceProject: true;
+    compiledImage: boolean;
+    kodeosInstallCompatible: boolean;
+    deviceVerified: false;
+  };
+  stage: 'source_project' | 'compiled_image' | 'kodeos_install_compatible';
+  deviceVerification: 'NOT TESTED';
+};
+
+/** Larger than anything the apps region could hold: refuse before reading. */
+const READ_LIMIT = 16 * 1024 * 1024;
+const APPS_REGION = PARTITIONS.find(partition => partition.name === 'apps')?.size ?? 0;
+
+function cString(bytes: Buffer, offset: number, length: number): string {
+  const slice = bytes.subarray(offset, offset + length);
+  const end = slice.indexOf(0);
+  return slice.subarray(0, end < 0 ? slice.length : end).toString('latin1');
+}
+
+const printable = (text: string): boolean => /^[\x20-\x7e]*$/.test(text);
+
+export type ParsedImage = {
+  chipId: number; chip: string; segments: number;
+  appDescriptor?: NonNullable<ImageInspection['appDescriptor']>;
+  manifest?: NonNullable<ImageInspection['manifest']>;
+};
+
+/** Parse the fixed-offset prefix of an ESP image. Throws IMAGE_MALFORMED when
+ * the bytes are not an ESP image at all. */
+export function parseImage(bytes: Buffer): ParsedImage {
+  if (bytes.length < IMAGE.headerLength || bytes[0] !== IMAGE.magic) {
+    throw new KodeRefusal('IMAGE_MALFORMED', 'The file does not start with an ESP image header.');
+  }
+  const chipId = bytes.readUInt16LE(IMAGE.chipIdOffset);
+  const parsed: ParsedImage = {
+    chipId, chip: CHIP_IDS[chipId] ?? `unknown(0x${chipId.toString(16)})`, segments: bytes[1] ?? 0,
+  };
+  if (bytes.length >= IMAGE.manifestOffset && bytes.readUInt32LE(IMAGE.idfDescOffset) === IMAGE.idfDescMagic) {
+    const descriptor = {
+      version: cString(bytes, IMAGE.versionOffset, IMAGE.versionLength),
+      projectName: cString(bytes, IMAGE.projectNameOffset, IMAGE.projectNameLength),
+      buildTime: cString(bytes, IMAGE.timeOffset, IMAGE.timeLength),
+      buildDate: cString(bytes, IMAGE.dateOffset, IMAGE.dateLength),
+      idfVersion: cString(bytes, IMAGE.idfVersionOffset, IMAGE.idfVersionLength),
+    };
+    if (Object.values(descriptor).every(printable)) parsed.appDescriptor = descriptor;
+  }
+  if (bytes.length >= IMAGE.manifestOffset + 8 && bytes.readUInt32LE(IMAGE.manifestOffset) === IMAGE.manifestMagic) {
+    const version = bytes.readUInt32LE(IMAGE.manifestOffset + 4);
+    const categoryLength = version === 1 ? IMAGE.manifestCategoryLengthV1 : IMAGE.manifestCategoryLengthV2;
+    const nameOffset = IMAGE.manifestOffset + 8;
+    if ((IMAGE.manifestKnownVersions as readonly number[]).includes(version) &&
+        bytes.length >= nameOffset + IMAGE.manifestNameLength + categoryLength) {
+      const displayName = cString(bytes, nameOffset, IMAGE.manifestNameLength);
+      const category = cString(bytes, nameOffset + IMAGE.manifestNameLength, categoryLength);
+      if (printable(displayName) && printable(category)) {
+        parsed.manifest = {
+          version, displayName,
+          categories: category.toLowerCase().split(',').map(item => item.trim()).filter(Boolean),
+        };
+      }
+    }
+  }
+  return parsed;
+}
+
+function parseJson(text: string | undefined): Record<string, unknown> | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const value: unknown = JSON.parse(text);
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const basename = (file: string): string => file.split(/[\\/]/).pop() ?? file;
+
+export async function inspectImage(config: HostConfig, projectName: unknown): Promise<ImageInspection> {
+  const { dir, name } = await requireProject(config, projectName);
+  const relative = `build/${name}.bin`;
+  let bytes: Buffer | undefined;
+  try {
+    bytes = await readInside(dir, relative, READ_LIMIT);
+  } catch (error) {
+    if (error instanceof KodeRefusal && error.reasonCode === 'VALIDATION_FAILED') {
+      throw new KodeRefusal('IMAGE_TOO_LARGE', `${relative} is larger than ${READ_LIMIT} bytes; no app image can be that size.`);
+    }
+    throw error;
+  }
+  if (!bytes) {
+    throw new KodeRefusal('IMAGE_NOT_FOUND', `${relative} does not exist. The project has not produced an image; nothing was built by this call.`, 'not_verified');
+  }
+  const parsed = parseImage(bytes);
+  const checks: ImageCheck[] = [];
+  const check = (id: string, pass: boolean, detail: string) => { checks.push({ id, pass, detail }); return pass; };
+
+  // ---- Stage 2: a compiled image for the right chip with the expected identity ----
+  const chipOk = check('image.chip', parsed.chip === REQUIRED_CHIP,
+    `Image header chip id 0x${parsed.chipId.toString(16).padStart(4, '0')} is ${parsed.chip}; the production main chip is ${REQUIRED_CHIP}.`);
+  const descriptorOk = check('image.app_descriptor', parsed.appDescriptor !== undefined,
+    parsed.appDescriptor ? `ESP-IDF app descriptor found: project ${parsed.appDescriptor.projectName}, version ${parsed.appDescriptor.version}.`
+      : 'No ESP-IDF app descriptor at offset 0x20.');
+  const identityOk = check('image.identity', parsed.appDescriptor?.projectName === name,
+    `The image names project "${parsed.appDescriptor?.projectName ?? ''}"; the project is "${name}".`);
+  const idfOk = check('image.idf_version', parsed.appDescriptor !== undefined && isSupportedIdf(parsed.appDescriptor.idfVersion.replace(/-.*$/, '')),
+    `The image was built with ESP-IDF "${parsed.appDescriptor?.idfVersion ?? 'unknown'}"; the pinned SDK builds with the v6.1 series.`);
+  const compiledImage = chipOk && descriptorOk && identityOk;
+
+  // ---- Stage 3: the kodeOS app contract, judged from source-level rules ----
+  const manifestOk = check('app.manifest', parsed.manifest !== undefined,
+    parsed.manifest ? `KODE_APP_MANIFEST v${parsed.manifest.version}: "${parsed.manifest.displayName}" in ${parsed.manifest.categories.join(', ')}.`
+      : 'No readable KODE_APP_MANIFEST ("KAPD") at offset 0x120: kodeOS would treat the app as unmanifested.');
+  const sdkconfig = parseJson(await readTextInside(dir, 'build/config/sdkconfig.json', 2 * 1024 * 1024));
+  const bootRoleApp = sdkconfig ? sdkconfig.KODEOS_BOOT_ROLE_APP === true : null;
+  const configuredTarget = sdkconfig && typeof sdkconfig.IDF_TARGET === 'string' ? sdkconfig.IDF_TARGET : null;
+  const roleOk = check('app.boot_role', bootRoleApp === true,
+    bootRoleApp === null ? 'build/config/sdkconfig.json is missing or unreadable, so the boot role is unknown.'
+      : `The resolved configuration has KODEOS_BOOT_ROLE_APP=${bootRoleApp}.`);
+  const targetOk = check('app.configured_target', configuredTarget === REQUIRED_CHIP,
+    `The resolved configuration targets ${configuredTarget ?? 'unknown'}.`);
+
+  const flasher = parseJson(await readTextInside(dir, 'build/flasher_args.json', 256 * 1024));
+  const flashFiles = flasher?.flash_files;
+  const flashEntries = flashFiles !== null && typeof flashFiles === 'object' && !Array.isArray(flashFiles)
+    ? Object.entries(flashFiles as Record<string, unknown>).map(([offset, file]) => ({ offset, file: String(file) }))
+    : [];
+  const single = flashEntries.length === 1 ? flashEntries[0] : undefined;
+  const mailboxOnly = single !== undefined && Number(single.offset) === MAILBOX.offset && basename(single.file) === `${name}.bin`;
+  const flashPlan: ImageInspection['buildMetadata']['flashPlan'] = !flasher ? 'unreadable' : mailboxOnly ? 'mailbox_only' : 'not_mailbox_only';
+  const flashOk = check('app.flash_plan', mailboxOnly,
+    !flasher ? 'build/flasher_args.json is missing or unreadable, so the generated flash plan was not checked.'
+      : mailboxOnly ? `The generated flash plan writes only ${name}.bin at the app_pending offset 0x${MAILBOX.offset.toString(16)}.`
+        : `The generated flash plan is not the single mailbox entry the app role produces: ${flashEntries.map(entry => `${entry.offset}=${basename(entry.file)}`).join(', ') || 'no entries'}.`);
+  const fitsMailbox = bytes.length <= MAILBOX.imageMax;
+  const fitsCatalogue = bytes.length <= CATALOGUE_IMAGE_MAX;
+  const sizeOk = check('app.size', fitsCatalogue && bytes.length <= APPS_REGION,
+    `The image is ${bytes.length} bytes. Catalogue limit ${CATALOGUE_IMAGE_MAX}; mailbox limit ${MAILBOX.imageMax}${fitsMailbox ? '' : ' (too large for the mailbox route; console install only)'}.`);
+  const kodeosInstallCompatible = compiledImage && idfOk && manifestOk && roleOk && targetOk && flashOk && sizeOk;
+
+  const inspection: ImageInspection = {
+    projectName: name,
+    artefact: { path: relative, sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') },
+    header: { chipId: parsed.chipId, chip: parsed.chip, segments: parsed.segments },
+    buildMetadata: { bootRoleApp, configuredTarget, flashPlan, flashEntries },
+    size: { mailboxMax: MAILBOX.imageMax, fitsMailbox, catalogueMax: CATALOGUE_IMAGE_MAX, fitsCatalogue, appsRegion: APPS_REGION },
+    checks,
+    stages: { sourceProject: true, compiledImage, kodeosInstallCompatible, deviceVerified: false },
+    stage: kodeosInstallCompatible ? 'kodeos_install_compatible' : compiledImage ? 'compiled_image' : 'source_project',
+    deviceVerification: 'NOT TESTED',
+  };
+  if (parsed.appDescriptor) inspection.appDescriptor = parsed.appDescriptor;
+  if (parsed.manifest) inspection.manifest = parsed.manifest;
+  return inspection;
+}
