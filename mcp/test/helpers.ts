@@ -88,10 +88,22 @@ export function fakeImage(options: {
 }
 
 /** Build outputs as an app-role ESP-IDF build of the SDK would leave them. */
-export function buildOutputs(name: string, image: Buffer, options: { appRole?: boolean; flashFiles?: Record<string, string> } = {}): Record<string, string | Buffer> {
+export function buildOutputs(
+  name: string, image: Buffer,
+  options: {
+    appRole?: boolean; flashFiles?: Record<string, string>;
+    /** KODEOS_HOME_HOLD in the resolved configuration: true by default, `null` leaves the key out. */
+    homeHold?: boolean | string | null;
+    /** KQP_AO_WATCH in the resolved configuration: true by default, `null` leaves the key out. */
+    aoWatch?: boolean | string | null;
+  } = {},
+): Record<string, string | Buffer> {
+  const sdkconfig: Record<string, unknown> = { IDF_TARGET: 'esp32p4', KODEOS_BOOT_ROLE_APP: options.appRole ?? true };
+  if (options.homeHold !== null) sdkconfig.KODEOS_HOME_HOLD = options.homeHold ?? true;
+  if (options.aoWatch !== null) sdkconfig.KQP_AO_WATCH = options.aoWatch ?? true;
   return {
     [`build/${name}.bin`]: image,
-    'build/config/sdkconfig.json': JSON.stringify({ IDF_TARGET: 'esp32p4', KODEOS_BOOT_ROLE_APP: options.appRole ?? true }),
+    'build/config/sdkconfig.json': JSON.stringify(sdkconfig),
     'build/flasher_args.json': JSON.stringify({
       flash_files: options.flashFiles ?? { [`0x${MAILBOX.offset.toString(16)}`]: `${name}.bin` },
     }),

@@ -145,11 +145,42 @@ function withoutYamlComment(line: string): string {
   return line;
 }
 
-function parseKconfig(text: string): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const line of text.split(/\r?\n/)) {
-    const match = /^\s*(CONFIG_[A-Z0-9_]+)=(.*)$/.exec(line);
-    if (match?.[1] !== undefined && match[2] !== undefined) map.set(match[1], match[2].trim());
+/** Every line break a reader of text may honour: LF, CRLF and a lone CR. Kconfig opens its files
+ * with universal newlines, and C preprocessors and YAML parsers treat a lone CR as a line end, so
+ * a check that splits on LF alone sees one line where they see two. */
+const LINE_BREAK = /\r\n|\r|\n/;
+
+/** What Kconfig makes of the text after "=": a quoted string keeps its quotes and loses an
+ * inline comment after the closing quote; any other value loses a "#" comment (esp-idf-kconfig
+ * strips an inline comment from an unquoted value). Reading the unquoted case from the FIRST
+ * "#" is wider than Kconfig's whitespace rule on purpose, which can only refuse more. */
+function kconfigValue(raw: string): string {
+  const value = raw.trim();
+  if (value.startsWith('"')) {
+    const quoted = /^"(?:[^"\\]|\\.)*"/.exec(value);
+    if (quoted !== null && /^\s*(?:#.*)?$/.test(value.slice(quoted[0].length))) return quoted[0];
+    return value;
+  }
+  const hash = value.indexOf('#');
+  return hash < 0 ? value : value.slice(0, hash).trimEnd();
+}
+
+/** Every assignment of every symbol, in file order. Kconfig reads "CONFIG_X=value" and
+ * "# CONFIG_X is not set" (which is X=n), and a later line beats an earlier one. This reads
+ * both forms on purpose a little more widely than Kconfig does (indented, any case in the
+ * name, text after "is not set"): reading wider can only refuse more. One bounded line at a
+ * time; the caller has already applied exceedsParseBounds. */
+function parseKconfigAssignments(text: string): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  const add = (key: string, value: string) => {
+    const seen = map.get(key);
+    if (seen === undefined) map.set(key, [value]); else seen.push(value);
+  };
+  for (const line of text.split(LINE_BREAK)) {
+    const assignment = /^\s*(CONFIG_[A-Za-z0-9_]+)\s*=(.*)$/.exec(line);
+    if (assignment?.[1] !== undefined && assignment[2] !== undefined) { add(assignment[1], kconfigValue(assignment[2])); continue; }
+    const unset = /^\s*#\s*(CONFIG_[A-Za-z0-9_]+)\s+is\s+not\s+set/.exec(line);
+    if (unset?.[1] !== undefined) add(unset[1], 'n');
   }
   return map;
 }
@@ -164,7 +195,7 @@ function parseDependencies(text: string): Dependency[] {
   const dependencies: Dependency[] = [];
   let inside = false;
   let current: Dependency | undefined;
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of text.split(LINE_BREAK)) {
     const line = withoutYamlComment(raw);
     if (line.trim() === '') continue;
     if (/^dependencies:\s*$/.test(line)) { inside = true; continue; }
@@ -259,11 +290,42 @@ async function looksBinary(path: string): Promise<boolean> {
 }
 
 /** Backslash-newline (also CRLF) is deleted before tokenising in C, so a name split
- * by one is still that name. Linear: one pass over a bounded file. */
-const joinLineSplices = (text: string): string => text.replace(/\\\r?\n/g, '');
+ * by one is still that name. GCC and clang also treat a backslash followed by spaces,
+ * tabs, form feeds or vertical tabs and then the newline as a splice (with a warning),
+ * so those are joined too. Trigraph splices (`??/` then a newline) are NOT handled: a
+ * name split that way passes C12, which is one more reason C12 is only a heuristic.
+ * Linear: one pass over a bounded file. */
+const joinLineSplices = (text: string): string => text.replace(/\\[ \t\f\v]*\n/g, '');
 
-/** Includes whose path leaves main/ via "..": the target is not scanned. */
-const PARENT_INCLUDE = /^[ \t]*#[ \t]*include[ \t]*["<]([^">\r\n]*)[">]/gm;
+/** What a C preprocessor sees before it looks for splices, comments or directives: a leading
+ * UTF-8 byte order mark is skipped, and CRLF and a lone CR are both a newline. Every later C12
+ * step then works on LF alone. */
+const normaliseSource = (text: string): string =>
+  (text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text).replace(/\r\n?/g, '\n');
+
+/** An include directive spelled `#`, the digraph `%:` or the trigraph `??=`, for include,
+ * include_next or import, and what follows it on the line. */
+const INCLUDE_DIRECTIVE = /^[ \t\f\v]*(?:#|%:|\?\?=)[ \t\f\v]*(?:include_next|include|import)\b(.*)$/;
+
+/** Whether an include operand is one this check cannot vouch stays inside main/: a quoted
+ * or angle path that contains ".." or is absolute (leading / or \, or a drive letter and a
+ * colon), or anything that is not a well-formed quoted or angle literal (a macro operand,
+ * for one). A heuristic and a warning only; macros are not resolved. */
+function includeLeavesMain(operand: string): boolean {
+  const literal = /^\s*(?:"([^"\r\n]*)"|<([^>\r\n]*)>)/.exec(operand);
+  if (literal === null) return true;
+  const path = literal[1] ?? literal[2] ?? '';
+  return path.includes('..') || /^[/\\]/.test(path) || /^[A-Za-z]:/.test(path);
+}
+
+/** Whether any line of the (splice-joined, comment-stripped) text is an include that leaves main/. */
+function hasIncludeLeavingMain(text: string): boolean {
+  for (const line of text.split('\n')) {
+    const match = INCLUDE_DIRECTIVE.exec(line);
+    if (match !== null && includeLeavesMain(match[1] ?? '')) return true;
+  }
+  return false;
+}
 
 async function listFiles(dir: string, extensions: string[]): Promise<string[]> {
   try {
@@ -383,6 +445,32 @@ function canonicalName(name: string): string {
 
 type WalkResult = { extra: string[]; links: string[]; boundExceeded: boolean };
 
+// What `idf.py -C <project> -B <project>/build build` reads from the PROJECT directory, read
+// from the ESP-IDF v6.1.0 checkout (C:/kt/esp-idf-v6.1) and the rule that models each input.
+// Anything not in this table is not read by the build, or is refused by the walk below.
+//
+// | Input                                  | Read by (ESP-IDF v6.1.0)                                  | Modelled by                          |
+// |----------------------------------------|-----------------------------------------------------------|--------------------------------------|
+// | CMakeLists.txt                         | tools/idf_py_actions/tools.py:784; cmake                  | BL-ROOT-CMAKE                        |
+// | main/CMakeLists.txt                    | project.cmake:592-595 (component dirs)                    | BL-MAIN-CMAKE                        |
+// | main/idf_component.yml                 | component manager, build.cmake:655-724                    | BL-SDK-PIN, B1                       |
+// | sdkconfig.defaults                     | project.cmake:785-801; kconfig.cmake:187-192              | B3, B4, B7, D8, C2-WATCH             |
+// | sdkconfig.defaults.<target>            | kconfig.cmake:187-192 (next to each defaults file)        | BL-EXTRA-BUILD-FILE, B5              |
+// | CMakePresets.json, CMakeUserPresets.json | core_ext.py:282-366, tools.py:808-826 (--preset)        | BL-EXTRA-BUILD-FILE (any depth)      |
+// | <component>/sdkconfig.rename[.<target>]| kconfig.cmake:57-58                                       | BL-EXTRA-BUILD-FILE (any depth)      |
+// | idf_ext.py                             | idf.py:979-985 (project dir), idf.py:1232 (components)    | BL-EXTRA-BUILD-FILE                  |
+// | *.cmake (project_include.cmake etc.)   | component.cmake, project.cmake include them               | BL-EXTRA-BUILD-FILE                  |
+// | Kconfig*, Kconfig.projbuild            | kconfig.cmake:36-45, 73-79                                | BL-EXTRA-BUILD-FILE                  |
+// | other CMakeLists.txt                   | add_subdirectory / component dirs                         | BL-EXTRA-BUILD-FILE                  |
+// | components/                            | project.cmake:595                                         | BL-EXTRA-BUILD-FILE                  |
+// | build/, sdkconfig, sdkconfig.old       | cache and config of an earlier build                      | BUILD_STATE_PRESENT (build.ts), BL-SDKCONFIG |
+// | managed_components/, dependencies.lock | build.cmake:683-717; idf.py:1121                          | BL-UNVERIFIABLE warning (accepted residual) |
+// | version.txt                            | project.cmake:237 (only when PROJECT_VER is unset)        | none needed: the pinned root sets PROJECT_VER; data only |
+//
+// No further project-directory input was found (a main/ source is compiled, but only files the
+// strict main/CMakeLists.txt grammar names). Environment-driven inputs (SDKCONFIG_DEFAULTS,
+// IDF_EXTENSION_ALLOW_UNTRUSTED) are not in the project and are not modelled here.
+
 /** Walk the project without following any link, skipping only the top-level
  * build/ and managed_components/. Bounded in depth and entry count. */
 async function walkProject(dir: string): Promise<WalkResult> {
@@ -415,7 +503,12 @@ async function walkProject(dir: string): Promise<WalkResult> {
       // kconfiglib has a preprocessor with a shell function, and whether ESP-IDF's
       // variant runs it could not be checked (ESP-IDF was not installed). The official
       // template has no Kconfig file, so a project from it is unaffected.
+      // CMake presets are applied with no flag (core_ext.py:282-366) and can set CMAKE_PROJECT_INCLUDE;
+      // a component's sdkconfig.rename[.<target>] (kconfig.cmake:57-58) can map a made-up name onto a
+      // protected symbol with inversion. Refused at any depth, whatever the file holds.
       if (canonical === 'idf_ext.py' || canonical.endsWith('.cmake') || canonical.startsWith('sdkconfig.defaults.') ||
+          canonical === 'cmakepresets.json' || canonical === 'cmakeuserpresets.json' ||
+          canonical === 'sdkconfig.rename' || canonical.startsWith('sdkconfig.rename.') ||
           (!child.isDirectory() && canonical.startsWith('kconfig')) ||
           (canonical === 'cmakelists.txt' && lowerPath !== 'cmakelists.txt' && lowerPath !== 'main/cmakelists.txt') ||
           (depth === 1 && canonical === 'components')) {
@@ -487,7 +580,7 @@ async function checkBuildLogic(dir: string, name: string, pinnedFiles: TemplateM
   // 4 and 6. Nothing else that a build would load, and no links.
   const walk = await walkProject(dir);
   gate('BL-EXTRA-BUILD-FILE', walk.extra.length === 0,
-    'No idf_ext.py, .cmake file, Kconfig* file, extra CMakeLists.txt, components/ directory or per-target defaults file.',
+    'No idf_ext.py, .cmake file, Kconfig* file, extra CMakeLists.txt, components/ directory, per-target defaults file, CMake presets file or sdkconfig.rename file.',
     `These files would be loaded by a build and are not part of the pinned template: ${walk.extra.slice(0, 10).map(echo).join(', ')}${walk.extra.length > 10 ? ' and more' : ''}.`);
   gate('BL-LINK', walk.links.length === 0,
     'No top-level entry, and nothing in main/ or appdata/, is a link.',
@@ -590,22 +683,31 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
 
   // ---- sdkconfig.defaults: role, partition table, radio trio ----
   const defaultsRaw = await readParsed('sdkconfig.defaults');
-  const defaults = parseKconfig(defaultsRaw ?? '');
-  check('B4', 'reject', defaults.get('CONFIG_KODEOS_BOOT_ROLE_APP') === 'y',
+  const assignments = parseKconfigAssignments(defaultsRaw ?? '');
+  const lastOf = (key: string): string | undefined => assignments.get(key)?.at(-1);
+  // Kconfig keeps the last assignment, but a never-off rule judges EVERY assignment of its
+  // symbol, so no later or earlier line can be relied on to win.
+  const allOf = (key: string): string[] => assignments.get(key) ?? [];
+  const defaults = { get: lastOf };
+  const appRole = allOf('CONFIG_KODEOS_BOOT_ROLE_APP');
+  check('B4', 'reject', appRole.length > 0 && appRole.every(value => value === 'y') &&
+      allOf('CONFIG_KODEOS_BOOT_ROLE_OS').every(value => value === 'n'),
     'CONFIG_KODEOS_BOOT_ROLE_APP=y: the firmware takes the app role.',
-    'sdkconfig.defaults must set CONFIG_KODEOS_BOOT_ROLE_APP=y. Without the app role, idf.py flash targets kodeOS\'s own slot.');
+    'sdkconfig.defaults must set CONFIG_KODEOS_BOOT_ROLE_APP=y, every time it is assigned, and never set CONFIG_KODEOS_BOOT_ROLE_OS to anything but n ("# ... is not set" counts as n and "CONFIG_KODEOS_BOOT_ROLE_APP is not set" is refused). Without the app role, idf.py flash targets kodeOS\'s own slot.');
   check('B3', 'reject', defaults.get('CONFIG_PARTITION_TABLE_CUSTOM_FILENAME') === `"${PARTITION_TABLE_SETTING}"`,
     'The partition table comes from the fetched board support package.',
     `CONFIG_PARTITION_TABLE_CUSTOM_FILENAME must be "${PARTITION_TABLE_SETTING}".`);
   if (defaults.get('CONFIG_KODEOS_RADIO') === 'n') {
     check('B7', 'reject', defaults.get('CONFIG_ESP_HOSTED_ENABLED') === 'n' && defaults.get('CONFIG_BT_ENABLED') === 'n',
       'The radio is off together with esp-hosted and Bluetooth.',
-      'CONFIG_KODEOS_RADIO=n must come with CONFIG_ESP_HOSTED_ENABLED=n and CONFIG_BT_ENABLED=n.');
+      'CONFIG_KODEOS_RADIO=n (or "# CONFIG_KODEOS_RADIO is not set") must come with CONFIG_ESP_HOSTED_ENABLED=n and CONFIG_BT_ENABLED=n, in either form.');
   }
-  check('D8', 'reject', defaults.get('CONFIG_KODEOS_HOME_HOLD') !== 'n',
-    'Holding BOT still returns to kodeOS.', 'CONFIG_KODEOS_HOME_HOLD=n is refused: holding BOT must always return to kodeOS.');
-  check('C2-WATCH', 'reject', defaults.get('CONFIG_KQP_AO_WATCH') !== 'n',
-    'The Active Object watchdog is left on.', 'CONFIG_KQP_AO_WATCH=n is refused by the catalogue.');
+  check('D8', 'reject', allOf('CONFIG_KODEOS_HOME_HOLD').every(value => value === 'y'),
+    'Holding BOT still returns to kodeOS.',
+    'CONFIG_KODEOS_HOME_HOLD is refused unless every assignment is exactly y (CONFIG_KODEOS_HOME_HOLD=n and "# CONFIG_KODEOS_HOME_HOLD is not set" are both refused): holding BOT must always return to kodeOS.');
+  check('C2-WATCH', 'reject', allOf('CONFIG_KQP_AO_WATCH').every(value => value === 'y'),
+    'The Active Object watchdog is left on.',
+    'CONFIG_KQP_AO_WATCH is refused by the catalogue unless every assignment is exactly y (=n and "# CONFIG_KQP_AO_WATCH is not set" are both refused).');
   const rootFiles = await listFiles(dir, ['']);
   const targetDefaults = rootFiles.filter(file => /^sdkconfig\.defaults\..+/.test(file));
   check('B5', 'reject', targetDefaults.length === 0, 'Settings live in sdkconfig.defaults alone.',
@@ -622,7 +724,7 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
   // Any spelling of override_path outside a comment rejects: a quoted or spaced
   // key is still that key. Comments are excluded because the official template's
   // own manifest explains override_path in one.
-  const overridePresent = (manifestYaml ?? '').split(/\r?\n/)
+  const overridePresent = (manifestYaml ?? '').split(LINE_BREAK)
     .some(line => withoutYamlComment(line).toLowerCase().includes('override_path'));
   const versions = new Set(kodeDeps.map(dep => dep.fields.get('version') ?? ''));
   const pinnedRelease = versions.size === 1 ? [...versions][0] ?? '' : '';
@@ -649,8 +751,8 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
     if (await looksBinary(join(dir, 'main', file))) continue;
     const raw = await readParsed(`main/${file}`);
     if (raw === undefined) { unscanned.push(file); continue; }
-    const text = stripCComments(joinLineSplices(raw));
-    if ([...text.matchAll(PARENT_INCLUDE)].some(match => (match[1] ?? '').includes('..'))) leavingMain.push(file);
+    const text = stripCComments(joinLineSplices(normaliseSource(raw)));
+    if (hasIncludeLeavingMain(text)) leavingMain.push(file);
     // The manifest macro is looked for where it always was: the top level of main/.
     if (!file.includes('/') && MANIFEST_EXTENSIONS.some(ext => file.toLowerCase().endsWith(ext))) {
       manifests = manifests.concat([...text.matchAll(/\bKODE_APP_MANIFEST\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)/g)]);
@@ -677,7 +779,7 @@ export async function validateProject(config: HostConfig, projectName: unknown, 
 
   if (leavingMain.length > 0) {
     findings.push({ rule: 'C12-INCLUDE', level: 'warn', status: 'fail',
-      message: `A source under main/ includes a path containing "..": ${leavingMain.slice(0, 10).map(echo).join(', ')}. Files outside main/ are not scanned by C12, so a flash call there would not be seen.` });
+      message: `A source under main/ has an include that may leave main/ (a path containing "..", an absolute path, or an operand that is not a plain quoted or angle path, such as a macro): ${leavingMain.slice(0, 10).map(echo).join(', ')}. Files outside main/ are not scanned by C12, so a flash call there would not be seen.` });
   }
 
   // ---- appdata and licence ----

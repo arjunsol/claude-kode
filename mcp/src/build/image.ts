@@ -180,6 +180,17 @@ export async function inspectImageWithDigests(config: HostConfig, projectName: u
       : `The resolved configuration has KODEOS_BOOT_ROLE_APP=${bootRoleApp}.`);
   const targetOk = check('app.configured_target', configuredTarget === REQUIRED_CHIP,
     `The resolved configuration targets ${configuredTarget ?? 'unknown'}.`);
+  // The static rules (D8, C2-WATCH) read sdkconfig.defaults, and a static reading of Kconfig input
+  // is never complete; the resolved configuration is where the final value is known.
+  const resolvedTrue = (key: string, meaning: string, id: string) => {
+    const value = sdkconfig ? sdkconfig[key] : undefined;
+    const seen = !sdkconfig ? 'is unknown because build/config/sdkconfig.json is missing or unreadable'
+      : value === undefined ? 'is absent'
+        : typeof value === 'boolean' ? `is ${value}` : 'is not a boolean';
+    return check(id, value === true, `${key} in the resolved configuration ${seen}; it must be true (${meaning}).`);
+  };
+  const homeHoldOk = resolvedTrue('KODEOS_HOME_HOLD', 'holding BOT returns to kodeOS', 'app.home_hold');
+  const aoWatchOk = resolvedTrue('KQP_AO_WATCH', 'the Active Object watchdog is on', 'app.ao_watchdog');
 
   const flasherBytes = await readInside(dir, 'build/flasher_args.json', 256 * 1024);
   const flasher = parseJson(flasherBytes?.toString('utf8'));
@@ -204,7 +215,7 @@ export async function inspectImageWithDigests(config: HostConfig, projectName: u
   // mailbox cannot hold is not installable by the route this inspection judges.
   const sizeOk = check('app.size', fitsCatalogue && bytes.length <= APPS_REGION && (!mailboxOnly || fitsMailbox),
     `The image is ${bytes.length} bytes. Catalogue limit ${CATALOGUE_IMAGE_MAX}; mailbox limit ${MAILBOX.imageMax}${fitsMailbox ? '' : ' (too large for the mailbox route the flash plan uses)'}.`);
-  const kodeosInstallCompatible = compiledImage && idfOk && manifestOk && roleOk && targetOk && flashOk && sizeOk;
+  const kodeosInstallCompatible = compiledImage && idfOk && manifestOk && roleOk && targetOk && homeHoldOk && aoWatchOk && flashOk && sizeOk;
 
   const inspection: ImageInspection = {
     projectName: name,

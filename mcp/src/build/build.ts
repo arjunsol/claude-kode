@@ -31,15 +31,24 @@ export type BuildProcessResult = {
    * (its parent already gone) is not reached by that and is not tracked, so this is not a
    * statement that nothing is still running. */
   attachedTreeEnded?: boolean;
+  /** True when the build process had exited but something it started still held its output open,
+   * so reading stopped after a short drain. That process was not ended and may still be running. */
+  outputHeldOpen?: boolean;
 };
 export type BuildRunner = (
   program: string, args: readonly string[],
   options: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
 ) => Promise<BuildProcessResult>;
 
+/** The one sentence added to a build message when the output was held open; it claims only what is known. */
+export const OUTPUT_HELD_OPEN_NOTE =
+  "Something the build started still held the build's output open after the build process exited; it was not ended and may still be running on this host.";
+
 /** The only verb this service can ever pass to idf.py. */
 const BUILD_VERB = 'build';
 const OUTPUT_TAIL = 6000;
+/** How long the runner keeps reading after the build process has exited, so normal output is complete. */
+const OUTPUT_DRAIN_MS = 2000;
 /** Entries whose pre-existence makes a build refuse (see buildApp). */
 const BUILD_STATE_ENTRIES = ['build', 'sdkconfig', 'sdkconfig.old'] as const;
 
@@ -98,6 +107,19 @@ export const systemBuildRunner: BuildRunner = (program, args, options) => new Pr
     });
   }, options.timeoutMs);
   child.on('error', error => { clearTimeout(timer); if (!settled) { settled = true; reject(error); } });
+  // The build process has exited with a known code. A process it started can still hold the
+  // pipes, so 'close' may never come: the deadline no longer applies, normal output gets a short
+  // drain, and then reading stops. The holder is not ended here; it outlives the build.
+  child.on('exit', code => {
+    if (timedOut || settled) return;
+    clearTimeout(timer);
+    const drain = setTimeout(() => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      finish({ exitCode: code, timedOut: false, output: '', outputHeldOpen: true });
+    }, OUTPUT_DRAIN_MS);
+    child.once('close', () => clearTimeout(drain));
+  });
   child.on('close', code => { clearTimeout(timer); if (!timedOut) finish({ exitCode: code, timedOut: false, output: '' }); });
 });
 
@@ -113,6 +135,8 @@ export type BuildOutcome = {
   buildLogicWarnings: string[];
   inspection: ImageInspection;
   logTail: string;
+  /** True when something the build started still held the build's output open after the build process exited. */
+  outputHeldOpen: boolean;
   evidence: { level: 'L1'; result: 'passed'; note: string };
 };
 
@@ -193,7 +217,8 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
       : `${limit} Ending the build process and the processes attached to it was not confirmed, so they, and any process that detached itself, may still be running on this host. Nothing was retried.`, 'failed');
   }
   if (result.exitCode !== 0) {
-    throw new KodeRefusal('BUILD_FAILED', `idf.py build exited with ${result.exitCode}. Log tail:\n${result.output}`, 'failed');
+    throw new KodeRefusal('BUILD_FAILED',
+      `idf.py build exited with ${result.exitCode}. Log tail:\n${result.output}${result.outputHeldOpen === true ? `\n${OUTPUT_HELD_OPEN_NOTE}` : ''}`, 'failed');
   }
   let inspection: ImageInspection;
   let digests: BuildDigests;
@@ -226,6 +251,7 @@ export async function buildApp(config: HostConfig, projectName: unknown, options
       .map(finding => `${finding.rule}: ${finding.message}`),
     inspection,
     logTail: result.output,
+    outputHeldOpen: result.outputHeldOpen === true,
     evidence: {
       level: 'L1', result: 'passed',
       note: 'A build was observed on this host. This is build evidence only: it is not simulation, device or module evidence and authorises no installation.',

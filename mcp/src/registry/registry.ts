@@ -30,6 +30,8 @@ export type ClaimEvaluation = {
   effectiveState: ClaimState | 'stale' | 'not_applicable';
   fresh: boolean;
   applicable: boolean;
+  /** True when the claim is not applicable because its recordedAt lies in the future, whatever target was stated. */
+  recordedInFuture: boolean;
   conflicting: boolean;
   issues: ReasonCode[];
 };
@@ -114,7 +116,13 @@ export class CapabilityRegistry {
     }
     for (const module of this.modules.values()) {
       for (const id of module.claimIds) {
-        if (!this.claims.has(id)) throw new RegistryIntegrityError(`Module ${module.id}: unknown claim ${id}.`);
+        const listed = this.claims.get(id);
+        if (!listed) throw new RegistryIntegrityError(`Module ${module.id}: unknown claim ${id}.`);
+        // A module lists only its own claims, so a board or another module's
+        // claim cannot read as evidence about this module.
+        if (listed.subject !== `module:${module.id}`) {
+          throw new RegistryIntegrityError(`Module ${module.id}: claim ${id} has subject ${listed.subject}, not module:${module.id}.`);
+        }
       }
     }
   }
@@ -136,21 +144,26 @@ export class CapabilityRegistry {
     // shipped claim is unscoped, so this is the check that applies to them); the
     // module a module claim is about, on a record of either level (a board-level
     // L3 record names no module and so cannot back a module claim); and
-    // observed no later than the claim's review date. Otherwise a prototype, an
-    // unknown revision or another module's run would read as proof.
+    // observed no later than the day the claim was recorded and its review date
+    // (a claim cannot be recorded before the observation that proves it).
+    // Otherwise a prototype, an unknown revision or another module's run would
+    // read as proof. A revision scoped claim needs its own record for every
+    // revision in its scope, and every one must be a revision the profile knows.
     const moduleSubject = /^module:(.+)$/.exec(claim.subject)?.[1];
     const knownRevisions = this.profiles.get(claim.scope.profileId)?.knownBoardRevisions ?? [];
-    const revisionAccepted = (revision: string): boolean => claim.scope.boardRevisions.length === 0
-      ? knownRevisions.includes(revision) : claim.scope.boardRevisions.includes(revision);
-    const backed = records.some(record => record !== undefined && !record.simulated &&
+    const scoped = claim.scope.boardRevisions;
+    const backing = records.filter((record): record is TestRecord => record !== undefined && !record.simulated &&
       record.result === 'passed' && needed.includes(record.level) &&
       record.board.profileId === claim.scope.profileId &&
-      revisionAccepted(record.board.revision) &&
       (moduleSubject === undefined || record.moduleId === moduleSubject) &&
-      record.observedAt <= claim.reviewBy);
+      record.observedAt <= claim.recordedAt && record.observedAt <= claim.reviewBy);
+    const backed = scoped.length === 0
+      ? backing.some(record => knownRevisions.includes(record.board.revision))
+      : scoped.every(revision => knownRevisions.includes(revision) &&
+        backing.some(record => record.board.revision === revision));
     if (!backed) {
       throw new RegistryIntegrityError(
-        `Claim ${claim.id}: state ${claim.state} needs a passed, non-simulated ${needed.join(' or ')} test record for the same profile, board revision and module, observed by its review date.`);
+        `Claim ${claim.id}: state ${claim.state} needs a passed, non-simulated ${needed.join(' or ')} test record for the same profile, board revision and module, observed by its review date and no later than the day the claim was recorded; a revision scoped claim needs a record for each revision in its scope, and each must be one the profile knows.`);
     }
   }
 
@@ -180,6 +193,11 @@ export class CapabilityRegistry {
     const issues: ReasonCode[] = [];
     const fresh = day(context.now) <= claim.reviewBy;
     let applicable = true;
+    // A claim recorded in the future cannot be current evidence. One calendar day
+    // of tolerance: recordedAt is a local date and this comparison is in UTC.
+    const tomorrow = new Date(context.now.getTime() + 24 * 60 * 60 * 1000);
+    const recordedInFuture = claim.recordedAt > day(tomorrow);
+    if (recordedInFuture) applicable = false;
     if (context.sdkRelease !== undefined && claim.scope.sdkReleases.length > 0 &&
         !claim.scope.sdkReleases.includes(context.sdkRelease)) applicable = false;
     if (context.boardRevision !== undefined && claim.scope.boardRevisions.length > 0 &&
@@ -190,7 +208,7 @@ export class CapabilityRegistry {
     if (conflicting) issues.push('EVIDENCE_CONFLICTING');
     const effectiveState = !applicable ? 'not_applicable' : !fresh ? 'stale'
       : conflicting ? 'conflicting' : claim.state;
-    return { claim, effectiveState, fresh, applicable, conflicting, issues };
+    return { claim, effectiveState, fresh, applicable, recordedInFuture, conflicting, issues };
   }
 
   /** Evidence references for a result. Unsourced (`unknown`) claims have none. */

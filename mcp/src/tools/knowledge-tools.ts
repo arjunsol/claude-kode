@@ -290,7 +290,7 @@ export function getEvidence(deps: KodeDeps, input: z.infer<typeof evidenceInput>
   const single = input.claimId !== undefined ? evaluated[0] : undefined;
   if (input.claimId !== undefined && !single) {
     status = 'not_verified'; reasonCode = 'EVIDENCE_NOT_APPLICABLE';
-    message = `${input.claimId} was not recorded for the stated SDK release or board revision.`;
+    message = `${input.claimId} is not applicable: it was recorded for a different SDK release or board revision than the one stated, or its recorded date is in the future.`;
   } else if (single && !single.fresh) {
     status = 'not_verified'; reasonCode = 'EVIDENCE_EXPIRED';
     message = `${single.claim.id} passed its review date ${single.claim.reviewBy} and must be re-verified.`;

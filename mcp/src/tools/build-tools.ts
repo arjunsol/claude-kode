@@ -4,7 +4,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { buildApp } from '../build/build.js';
+import { buildApp, OUTPUT_HELD_OPEN_NOTE } from '../build/build.js';
 import { inspectImage } from '../build/image.js';
 import { BuildReceipts } from '../build/receipts.js';
 import { newApp } from '../build/scaffold.js';
@@ -86,6 +86,7 @@ const buildPayload = z.object({
   buildLogicWarnings: z.array(z.string()),
   inspection: inspectionSchema,
   logTail: z.string(),
+  outputHeldOpen: z.boolean(),
   evidence: z.object({ level: z.literal('L1'), result: z.literal('passed'), note: z.string() }).strict(),
 }).strict();
 
@@ -115,6 +116,15 @@ function inspectionResult(tool: string, inspection: z.infer<typeof inspectionSch
   const failed = inspection.checks.filter(check => !check.pass).map(check => check.id).join(', ');
   return { status: 'not_verified', reasonCode: 'IMAGE_NOT_INSTALL_COMPATIBLE',
     message: `${tool === 'kode_build' ? 'The build produced an image, but it' : 'The image'} does not meet the kodeOS app contract (failed: ${failed}).` };
+}
+
+/** The kode_build message: the verdict, the build-logic warnings, and, when it is known, that a
+ * process the build started held the output open. */
+export function buildMessage(
+  message: string, outcome: { buildLogicWarnings: readonly string[]; outputHeldOpen: boolean },
+): string {
+  const withWarnings = withBuildLogicWarnings(message, outcome.buildLogicWarnings);
+  return outcome.outputHeldOpen ? `${withWarnings} ${OUTPUT_HELD_OPEN_NOTE}` : withWarnings;
 }
 
 /** Append the build-logic warnings to a build message, so a build that trusted
@@ -191,7 +201,7 @@ export function registerBuildTools(server: McpServer, deps: KodeDeps): void {
         ...(deps.runBuild !== undefined ? { run: deps.runBuild } : {}), receipts,
       });
       const base = inspectionResult(tool, outcome.inspection);
-      const summary = { ...base, message: withBuildLogicWarnings(base.message, outcome.buildLogicWarnings) };
+      const summary = { ...base, message: buildMessage(base.message, outcome) };
       return toToolResult(makeResult({
         tool, effectClass: 'H1', ...summary, verifiedLayer: 'build', payload: outcome, evidence: evidence(),
         artefactSha256: outcome.inspection.artefact.sha256, requiredNextEvidence: DEVICE_GATES,

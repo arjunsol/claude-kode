@@ -4,7 +4,12 @@
  */
 import { z } from 'zod';
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** A real calendar date: 2026-02-30 and 9999-99-99 match the digit pattern but
+ * are not dates, and would sort after every real one. */
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}, { message: 'not a real calendar date' });
 const sha1 = z.string().regex(/^[a-f0-9]{40}$/);
 const identifier = z.string().regex(/^[a-z0-9][a-z0-9_.-]{1,95}$/);
 

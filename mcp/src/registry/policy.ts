@@ -208,7 +208,11 @@ export function evaluateCompatibility(
       const result = registry.evaluate(claim, context);
       evaluated.push({ claimId: claim.id, required: requirement.minimum, found: result.effectiveState });
       if (!result.applicable) {
-        add('EVIDENCE_NOT_APPLICABLE', `${claim.id} was recorded for a different SDK release or board revision.`, `Re-verify ${claim.id} for the stated target.`);
+        if (result.recordedInFuture) {
+          add('EVIDENCE_NOT_APPLICABLE', `${claim.id} is dated ${claim.recordedAt}, which is in the future, so it cannot be current evidence.`, `Correct the recorded date of ${claim.id}, or re-verify it.`);
+        } else {
+          add('EVIDENCE_NOT_APPLICABLE', `${claim.id} was recorded for a different SDK release or board revision.`, `Re-verify ${claim.id} for the stated target.`);
+        }
       } else if (!result.fresh) {
         add('EVIDENCE_EXPIRED', `${claim.id} passed its review date ${claim.reviewBy}.`, `Re-verify ${claim.id} against current manufacturer sources.`);
       } else if (result.conflicting) {
