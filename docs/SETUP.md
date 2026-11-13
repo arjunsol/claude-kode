@@ -1,6 +1,8 @@
 # Development environment setup
 
-> **Production SDK update — 13 November 2026:** Kode's public `kode-sdk v0.1.0` requires **ESP-IDF v6.1**. The installer pin and this guide have been updated from the earlier 6.0.1 experiment, but no clean v6.1 install or P4 firmware build was executed in this environment. The previous host-only and network-failure results do **not** qualify the new firmware setup. The optional read-only MCP console is documented in [mcp/README.md](../mcp/README.md).\n\nThese launchers prepare the source checkout for development on Windows, macOS or
+> **Production SDK update — 13 November 2026:** Kode's public `kode-sdk v0.1.0` requires **ESP-IDF v6.1**. The installer pin and this guide have been updated from the earlier 6.0.1 experiment, but no clean v6.1 install or P4 firmware build was executed in this environment. The previous host-only and network-failure results do **not** qualify the new firmware setup. The optional read-only MCP console is documented in [mcp/README.md](../mcp/README.md).
+
+These launchers prepare the source checkout for development on Windows, macOS or
 Linux. They install per-user tools, build/test the MCP prototype and prepare the
 pinned P4 firmware toolchain. They do not flash, open serial ports, change system
 packages or install the plugin into Claude Code automatically.
