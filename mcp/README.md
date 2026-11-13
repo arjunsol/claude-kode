@@ -1,12 +1,15 @@
-# Claude Kode MCP — first read-only device slice
+# Claude Kode MCP server
 
-A locally launched TypeScript MCP stdio server, building on the original
-`inspect_capability` simulation fixture. **This is not a flashing, motor-control,
-RF-transmission, remote device or arbitrary console-command server.**
+A locally launched TypeScript MCP stdio server (`claude-kode-feasibility`, version 0.2.0)
+for the production Kode Dot (ESP32-P4 main chip, ESP32-C5 coprocessor). It answers
+questions from a source-level evidence registry, scaffolds, validates and builds kodeOS
+app projects, and inspects the built image. **It is not a flashing, installation,
+motor-control, RF-transmission, remote-device or arbitrary console-command server.**
+Nothing here has been run against a physical Dot.
 
 ## Build and test
 
-Run on Node **24.x** with the repository's locked dependencies:
+Run on Node 24.x with the locked dependencies:
 
 ```sh
 cd mcp
@@ -15,42 +18,268 @@ npm run build
 npm test
 ```
 
+`npm test` runs without a device, without ESP-IDF and without network access. It runs 422
+tests: 419 pass, 0 fail and 3 are skipped without the template variable below, and 420 pass,
+0 fail and 2 are skipped with it (last run on Windows, Node 24.22.1). One test scaffolds from a real `kode-app-template`
+v0.1.0 checkout and is skipped unless you set `KODE_TEST_TEMPLATE_DIR` to that checkout
+(an absolute path); with the variable set, the test that checks the refusal without a
+template is skipped instead. One test inspects a real build directory and is skipped unless
+you set `KODE_TEST_REAL_BUILD_DIR` to the `build/` directory of a project (named `rb_app`)
+that a real ESP-IDF v6.1 build produced. A run on commit b2fe984 with both variables set,
+against the real build of that commit, gave 421 pass, 0 fail and 1 skipped out of 422.
+
 The plugin root `.mcp.json` declares the built `mcp/dist/server.js` using
-`${CLAUDE_PLUGIN_ROOT}`. Run the build before enabling the plugin; start Claude
-Code with `claude --plugin-dir /absolute/path/to/claude-kode` and inspect
-`/mcp`. Direct execution is `node mcp/dist/server.js`. stdout is **only** MCP
-JSON-RPC; no HTTP listener or cloud service is created.
+`${CLAUDE_PLUGIN_ROOT}`. Run the build before enabling the plugin, start Claude Code with
+`claude --plugin-dir /absolute/path/to/claude-kode` and inspect `/mcp`. Direct execution
+is `node mcp/dist/server.js`. stdout carries MCP JSON-RPC only; no HTTP listener or cloud
+service is created.
 
 ## Tools
 
-| Name | Behaviour | Default |
+Seventeen tools are registered. Effect classes are defined in the PR #6 proposal: S0
+reads the registry, H0 reads host files or configuration, H1 writes files on the host,
+D1 opens the device's serial port.
+
+| Name | What it does | Effect | Default |
+| --- | --- | --- | --- |
+| `inspect_capability` | Simulated test fixture from PR #2; not evidence about a device | S0 | Available |
+| `kode_ping` | Runs official `kcli.py ping` | D1 | Needs operator opt-in |
+| `kode_boot_info` | Runs fixed `cmd boot_info` | D1 | Needs operator opt-in |
+| `kode_list_apps` | Runs fixed `cmd app_list` | D1 | Needs operator opt-in |
+| `kode_capture_screen` | Captures a PNG through the console and deletes the temporary file | D1 | Needs operator opt-in |
+| `kode_get_capabilities` | Board, SDK and console capabilities with evidence state. With no `capability` filter it returns `not_verified` (`EVIDENCE_CONFLICTING`), because the full list holds the two contradicting flash-offset claims; one clean capability returns `ok` | S0 | Available |
+| `kode_get_pinout` | J3 expansion header positions, controllers, power, board-owned pins | S0 | Available |
+| `kode_list_modules` | The five v1 modules with SDK availability and qualification | S0 | Available |
+| `kode_get_module_spec` | What is recorded and unknown about one module | S0 | Available |
+| `kode_get_evidence` | Evidence ledger: source, revision, state, review date, conflicts | S0 | Available |
+| `kode_check_compatibility` | Deterministic, advisory allow or refuse for an operation. A refusal is `status: refused` and a tool error carrying the first reason code; an allowed serial read carries `cautions` | S0 | Available |
+| `kode_get_sdk_contract` | kodeOS app contract for an assessed SDK release; a hazard is served only for a release its claim applies to, and console digests are keyed by kodeOS release (`console.integrityByKodeosRelease`) | S0 | Available |
+| `kode_get_toolchain_status` | Reports host configuration; starts no process | H0 | Available |
+| `kode_new_app` | Creates a project in the workspace from a verified template checkout | H1 | Needs `KODE_WORKSPACE_ROOT` and `KODE_TEMPLATE_DIR` |
+| `kode_validate` | Static checks of a workspace project; reads files only. Returns a `verdict` and, separately, `buildLogic.eligible` (whether `kode_build` will accept the project) | H0 | Needs `KODE_WORKSPACE_ROOT` |
+| `kode_build` | Runs the one fixed `idf.py build` command, only for a project whose build logic is the pinned template's and which has no `build/`, `sdkconfig` or `sdkconfig.old` yet; not a sandbox | H1 | Needs operator opt-in |
+| `kode_inspect_image` | Parses the built image and build metadata; reads files only. `ok` and `verifiedLayer: build` only for an image `kode_build` produced in this server process, with the image and both metadata files unchanged; otherwise `BUILD_NOT_OBSERVED` | H0 | Needs `KODE_WORKSPACE_ROOT` |
+
+Tools take a project name, never a path. A name is 1 to 31 characters of `a-z`, `0-9` and
+underscore, and is never `kodeos`, `c5_slave` or a Windows reserved device name (`con`,
+`prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`). Projects live at
+`<KODE_WORKSPACE_ROOT>/<name>`; links and junctions that leave the workspace are refused.
+No tool accepts a device command, a serial port, a Python executable, a flash offset or an
+approval.
+
+### Specified, not implemented
+
+PR #6 specifies a catalogue of 47 operations. Only the tools above exist. Not implemented:
+`kode_detect`, `kode_identify_device`, `kode_device_health`, `kode_serial_monitor`,
+`kode_test`, `kode_test_evidence`, `kode_plan_install`, `kode_install_app`,
+`kode_verify_firmware`, and every module tool. There is no flash, install, erase, kodeOS
+update, C5 update, radio or actuator tool. `kode_check_compatibility` can name such an
+operation and will refuse it.
+
+## Resources
+
+| URI | Content |
+| --- | --- |
+| `kode://profiles/kode-dot-p4c5` | Board identity and capabilities with evidence |
+| `kode://sdk/v0.1.1/app-contract` | The kode-sdk v0.1.1 application contract |
+| `kode://evidence/ledger` | Every evidence record |
+| `kode://modules/maker` | Maker module, as recorded |
+| `kode://modules/robotics` | Robotics module, as recorded |
+| `kode://modules/camera` | Camera module, as recorded |
+| `kode://modules/mesh` | Mesh module, as recorded |
+| `kode://modules/fck` | F*CK module, as recorded |
+
+Each resource is the same data the matching tool returns, as one JSON document.
+
+## Result envelope
+
+Every tool except `inspect_capability` and the four console tools returns one envelope,
+both as structured content and as JSON text:
+
+- `schemaVersion` (`"1"`), `tool`, `message`.
+- `status`: `ok`, `refused`, `not_verified`, `unsupported` or `failed`.
+- `reasonCode`: a value from a closed list (for example `BUILD_NOT_ENABLED`), so a caller
+  can branch on it. The build gate adds `BUILD_LOGIC_NOT_PINNED` (`kode_build` refused a
+  project whose build logic is not the pinned template's), `BUILD_STATE_PRESENT`
+  (`kode_build` refused because `build/`, `sdkconfig` or `sdkconfig.old` already exists)
+  and `BUILD_NOT_OBSERVED` (`kode_inspect_image` read files this server did not build, or
+  whose digests no longer match the build).
+- `effectClass`: the tool's effect class.
+- `verifiedLayer`: `none`, `documentation`, `source`, `build`, `simulation`, `device` or
+  `integration`. No tool in this slice returns `device` or `integration`.
+- `hardwareAuthorized`: the literal `false`. No tool can authorise a hardware operation.
+- `payload`, `evidence[]` (`claimId`, `sourceUri`, `revision`, `class`, `verifiedAt`),
+  `artefactSha256` and `requiredNextEvidence[]`.
+
+A `refused` or `failed` result is also an MCP tool error (`isError: true`). This includes
+the scope gates (`PROFILE_UNKNOWN`, `SDK_RELEASE_NOT_ASSESSED`,
+`BOARD_REVISION_NOT_IN_PROFILE`) on every knowledge tool; `not_verified` is kept for
+answers that are served but cannot be relied on. A refusal from
+`kode_build` with builds disabled has this shape (message shortened):
+
+```json
+{
+  "schemaVersion": "1",
+  "tool": "kode_build",
+  "status": "refused",
+  "reasonCode": "BUILD_NOT_ENABLED",
+  "message": "Builds are off. A build executes project and SDK build scripts on this host; the operator enables it with KODE_ENABLE_BUILD=1.",
+  "effectClass": "H1",
+  "verifiedLayer": "none",
+  "hardwareAuthorized": false,
+  "evidence": [],
+  "requiredNextEvidence": []
+}
+```
+
+## Host configuration
+
+The server reads its environment once per call. Everything is off or empty by default.
+
+| Variable | Default | What it does |
 | --- | --- | --- |
-| `inspect_capability` | Existing simulated P4/C5 fixture only | Available |
-| `kode_ping` | Run official `kcli.py -p COMx ping` | Blocked |
-| `kode_boot_info` | Run fixed `cmd boot_info` and return observations | Blocked |
-| `kode_list_apps` | Run fixed `cmd app_list` and return observations | Blocked |
-| `kode_capture_screen` | Capture PNG through the official console and return MCP image; delete temporary file | Blocked |
+| `KODE_WORKSPACE_ROOT` | empty | Absolute directory that exists. The only place tools read or write projects. Without it `kode_new_app`, `kode_validate`, `kode_build` and `kode_inspect_image` refuse with `WORKSPACE_NOT_CONFIGURED`. |
+| `KODE_TEMPLATE_DIR` | empty | Absolute path of a `kode-app-template` v0.1.0 checkout. `kode_new_app` hash-checks every file against the tag; CRLF checkouts of text files are accepted after normalisation. |
+| `KODE_ENABLE_BUILD` | unset | `1` enables `kode_build`. Any other value leaves it refused. |
+| `KODE_IDF_PATH` | empty | Absolute path of an ESP-IDF v6.1 checkout. |
+| `KODE_IDF_PYTHON` | empty | The Python interpreter of that ESP-IDF environment. |
+| `KODE_BUILD_TIMEOUT_S` | 1800 | Build deadline in seconds. Accepts integers 60 to 7200; any other value gives the default. |
+| `KODE_ENABLE_CONSOLE_READS` | unset | `1` enables the four console tools (see below). |
+| `KODE_TOOLS_DIR` | empty | Absolute path of the KodeOS `tools` directory. |
+| `KODE_CLI_SHA256`, `KODE_PAYLOAD_SHA256` | empty | Operator-pinned SHA-256 of `kcli.py` and `kpayload.py`. |
+| `KODE_PORT` | empty | Explicit Windows port, `COM1` to `COM256`. |
+| `KODE_PYTHON` | `python` on Windows, `python3` elsewhere | Python used to run `kcli.py`. |
 
-No tool accepts caller-supplied device commands, file paths, serial ports,
-Python executables or write/flash options. Host process execution uses
-`execFile` with an argv array and **no shell**, limited output/timeout and no
-automatic retry. No device discovery is attempted.
+Build setup in PowerShell, from a terminal where the ESP-IDF v6.1 environment is
+already activated:
 
-**Caution:** Opening the official USB serial connection can **reset the Dot**.
-Although the chosen console verbs are informational, serial attachment is not
-perfectly side-effect-free; MCP tool annotations deliberately do not claim
-`readOnlyHint=true` for hardware calls. Device identity is **not yet fully
-validated** by these observations.
+```powershell
+$env:KODE_WORKSPACE_ROOT = 'C:\kode-projects'          # must exist
+$env:KODE_TEMPLATE_DIR   = 'C:\src\kode-app-template'  # v0.1.0 checkout
+$env:KODE_IDF_PATH       = $env:IDF_PATH
+$env:KODE_IDF_PYTHON     = (Get-Command python).Source
+$env:KODE_ENABLE_BUILD   = '1'
+```
 
-## Operator opt-in (Windows, example PowerShell)
+Launch Claude Code from that same terminal. `kode_build` needs the server to be started
+from an activated ESP-IDF v6.1 environment; without it the toolchain check refuses with
+`TOOLCHAIN_NOT_CONFIGURED` or `TOOLCHAIN_VERSION_MISMATCH`. Call
+`kode_get_toolchain_status` to see what the host is missing.
 
-1. Obtain a checked-out, trusted **v0.1.0** of
-   [kodediy/KodeOS](https://github.com/kodediy/KodeOS/releases/tag/v0.1.0).
-   Do not use the moving `develop` branch. Install Python/pyserial in a trusted
-   environment (ESP-IDF provides Python). Leave the manufacturer files outside
-   this MIT repository.
-2. In the terminal from which Claude Code is launched, set the official tools
-   directory, its two **operator-pinned SHA-256** values and explicit COM port:
+`kode_build` runs exactly `<KODE_IDF_PYTHON> <KODE_IDF_PATH>/tools/idf.py -C <project> -B <project>/build build`,
+with no shell, one attempt and a bounded time, after the project passes validation and the
+build gate. **A build is not a sandbox.** It runs the SDK's CMake and Python code and
+fetches the pinned SDK over the network by tag. Enable it only for projects you trust, and
+build with no Dot attached. At the deadline the build process and the processes still
+attached to it are ended. A process that detached itself cannot be tracked and may still be
+running; the timeout message says so, and says when even the attached ending could not be
+confirmed. A build whose process has exited with a code is reported by that code, not as a
+timeout, even if something it started still holds its output open: the result then carries
+`outputHeldOpen: true` and a sentence saying that process was not ended and may still be
+running.
+
+### What kode_build will and will not build
+
+`idf.py build` executes the project's CMake and would import a project `idf_ext.py`, so
+fixing the command line does not by itself limit what a build does. `kode_build` therefore
+builds only a project whose build logic is the pinned template's, and otherwise refuses
+with `BUILD_LOGIC_NOT_PINNED` before any process starts. In practice that means a project
+made by `kode_new_app` whose build-logic files, and the other project files that ESP-IDF
+v6.1 reads, have not been altered or added to.
+
+- The root `CMakeLists.txt` and `main/idf_component.yml` must hash to the pinned
+  template's once the scaffold's own edits (name, version, SDK release line) are reversed.
+- `main/CMakeLists.txt` must be one `idf_component_register(...)` call with plain relative
+  names.
+- No `idf_ext.py`, extra `*.cmake`, extra `CMakeLists.txt`, top-level `components/`,
+  `sdkconfig.defaults.<x>`, `CMakePresets.json` or `CMakeUserPresets.json` (idf.py loads
+  them from the project and passes the chosen preset to cmake, which can run CMake the gate
+  has not seen), `sdkconfig.rename` or `sdkconfig.rename.<x>` (a rename line can invert a
+  protected setting) or file whose name starts with `Kconfig` (any letter case), at any
+  depth outside `build/` and `managed_components/`; no
+  links; a root `sdkconfig`, if present, keeps the app role and the ESP32-P4 target. The
+  `Kconfig*` refusal is a precaution: Kconfig has a preprocessor that upstream can use to
+  run a shell command, whether ESP-IDF's variant does could not be checked here, and the
+  official template has no such file. It is not a demonstrated exploit.
+
+The static rules read `sdkconfig.defaults` only if every line is one of these forms, and
+refuse the whole file otherwise:
+
+- an empty line;
+- a comment starting `#`, except the `# default:` pragma, the `# Deprecated options ...` and
+  `# End of deprecated options` markers, and an "is not set" line that is not exactly the
+  form below;
+- `CONFIG_NAME=value`, with `NAME` of A-Z, 0-9 and `_`, no space around `=`, no inline
+  comment, and a value that is `y`, `n`, a decimal number, a `0x` hex number or a
+  double-quoted string of printable ASCII with no backslash and no inner quote;
+- exactly `# CONFIG_NAME is not set`.
+
+The file may hold only printable ASCII, tab, LF and CRLF; a lone CR, other control bytes,
+DEL, a byte order mark and any non-ASCII byte are refused, in comments too. The same byte
+rule applies to `main/idf_component.yml` and to a root `sdkconfig`. For the settings the
+rules read (app role, OS role, hold-BOT, watchdog, radio, esp-hosted, Bluetooth) the value
+must be `y` or `n`, and the partition table must be a quoted string. A refusal reads
+`sdkconfig.defaults line N cannot be read with certainty: <reason>` followed by the accepted
+forms; `kode_validate` reports it as `BL-DEFAULTS-GRAMMAR` (not eligible to build) and
+`CK-DEFAULTS-GRAMMAR` (verdict fail), and the rules for the app role, hold-BOT, watchdog,
+partition table and radio fail with it. Trailing spaces and whitespace-only lines are refused
+too; the message names the line. Within a readable file, `CONFIG_X=n` and
+`# CONFIG_X is not set` both count as n, the app role, hold-BOT and watchdog rules judge every
+assignment, and the partition table and radio rules use the last. The partition table rule
+also refuses any other `CONFIG_PARTITION_TABLE_*` setting, and the radio rule applies unless
+the last radio line is `CONFIG_KODEOS_RADIO=y` (deleting the radio lines therefore needs
+`CONFIG_ESP_HOSTED_ENABLED=n` and `CONFIG_BT_ENABLED=n`). On the accepted forms the validator
+agreed with kconfgen 3.14.0 in every comparison run (see the design record). Kconfig
+meaning that no rule names can still change a protected value, which is why inspection also
+checks the resolved configuration. `SDKCONFIG_DEFAULTS` set in the operator's environment
+is outside these rules.
+
+Still the app author's to edit: source files, `sdkconfig.defaults`, `appdata/` and the
+`SRCS` list in `main/CMakeLists.txt`. `kode_validate` reports the gate as `buildLogic`
+(rule ids begin `BL-`), so a project can pass the verdict and still be ineligible. A
+pre-existing `managed_components/` or `dependencies.lock` cannot be verified; it is
+reported as a warning (`BL-UNVERIFIABLE`) and does not block the build. `kode_build`
+carries these warnings in its own result (`buildLogicWarnings`) and in its message.
+
+### Every build is a clean build
+
+`kode_build` refuses with `BUILD_STATE_PRESENT` (status `refused`) when any of `build/`,
+`sdkconfig` or `sdkconfig.old` already exists in the project, before any process starts. The
+message names which are present. State that exists before a build starts cannot be told
+apart from planted state: a planted `build/CMakeCache.txt` can pull project CMake into the
+build, a junction inside `build/` can send output outside the workspace, and a root
+`sdkconfig` can override `sdkconfig.defaults`, which is the only file the static rules read.
+The server does not delete them, because it never removes files it did not create in the
+same call. To build again, the caller removes those three with its own file tools and calls
+`kode_build` again. They are generated, so removing them loses nothing a build does not
+recreate. `kode_inspect_image` still reads `build/` after a build, so call it before
+removing anything. This removes one way of planting state ahead of a build; it does not make
+a build a sandbox.
+
+### Build receipts
+
+Files under `build/` can be written by anything. `kode_build` records three SHA-256
+digests, in memory, for the life of the server process: the image,
+`build/config/sdkconfig.json` and `build/flasher_args.json` (a missing file is recorded as
+absent). `kode_inspect_image` reports `ok` with `verifiedLayer: build` only when all three
+match. Changing any of them, or any image without a receipt, gives `not_verified` with
+`BUILD_NOT_OBSERVED` and `verifiedLayer: none`; the payload still
+describes the files (`buildObserved: false`). Receipts are not written to disk, so a server
+restart clears them and every image is unattested until it is built again.
+
+## Console read opt-in (Windows, example PowerShell)
+
+The four console tools are off until the operator opts in. **Opening the official USB
+serial connection can reset the Dot.** The chosen console verbs are informational, but
+serial attachment is not side-effect-free, so the tool annotations do not claim
+`readOnlyHint=true`.
+
+1. Obtain a checked-out, trusted [kodediy/KodeOS](https://github.com/kodediy/KodeOS)
+   release tag (v0.1.1 is the current pin; v0.1.0 is also assessed). Do not use the moving
+   `develop` branch. Install Python and pyserial in a trusted environment (ESP-IDF
+   provides Python). Leave the manufacturer files outside this MIT repository.
+2. In the terminal from which Claude Code is launched, set the tools directory, its two
+   operator-pinned SHA-256 values and the COM port:
 
 ```powershell
 $env:KODE_TOOLS_DIR = (Resolve-Path 'C:\src\KodeOS\tools').Path
@@ -61,37 +290,84 @@ $env:KODE_PYTHON = 'python'            # or full path to a trusted venv's python
 $env:KODE_ENABLE_CONSOLE_READS = '1'   # explicit opt-in: serial can reset the Dot
 ```
 
-SHA values are **local operator pins**, not a cryptographic attestation of
-upstream provenance. First verify the checkout/tag independently; the two pins
-then prevent silently running changed local scripts. Because `kcli.py` imports
-other Python dependencies, this is **not a complete subprocess sandbox**.
+The digests below are the SHA-256 of the files as stored in each tagged commit (LF line
+endings). `kode_get_toolchain_status` reports which release your `kcli.py` pin matches.
 
-Re-launch Claude Code from that terminal. For ordinary use or after testing,
-set `KODE_ENABLE_CONSOLE_READS=0`. The server always refuses device operations
-if the opt-in is absent, port is not `COM1`–`COM256`, either SHA is wrong,
-its script is missing, or the operation is not allowlisted.
+| Release | `tools/kcli.py` SHA-256 | `tools/kpayload.py` SHA-256 |
+| --- | --- | --- |
+| v0.1.1 | `a8c65236b51a904ee879c4ee1776612065417fae45eb4d15dc367c0cb737bcca` | `2d422a6982a9c3a7bb545bd53c55c3e77e02a9864b81bae095375007f1690d2e` |
+| v0.1.0 | `8df04628aa2b2acf09bc60d42814a573e7545cdf99f07ad0318ca723d39ca750` | `2d422a6982a9c3a7bb545bd53c55c3e77e02a9864b81bae095375007f1690d2e` |
 
-The console output or screenshot may contain serial numbers, screen contents
-or other personal information. These are returned to the requesting MCP client
-without telemetry; screenshots are held in a random temporary directory only
-while the command executes, then removed. Avoid forwarding captured results to
-third-party services unless you intend to.
+A Windows checkout with `core.autocrlf=true` produces different bytes, so its hashes will
+not match this table. Hash your own checkout, as the example above does, after verifying
+the tag independently.
+
+The pins are local operator pins, not a cryptographic attestation of upstream provenance.
+They stop the server silently running changed local scripts. Because `kcli.py` imports
+other Python dependencies, this is not a complete subprocess sandbox. The server refuses
+every console operation if the opt-in is absent, the port is not `COM1` to `COM256`,
+either SHA is wrong, a script is missing, or the operation is not one of the four fixed
+verbs. Set `KODE_ENABLE_CONSOLE_READS=0` for ordinary use.
+
+Console output or a screenshot may contain serial numbers, screen contents or other
+personal information. These go to the requesting MCP client without telemetry; screenshots
+exist only in a random temporary directory while the command runs. Avoid forwarding
+captured results to third-party services unless you intend to.
 
 ## Evidence and boundaries
 
-- Source: [official KodeOS tools/kcli.py v0.1.0](https://github.com/kodediy/KodeOS/blob/v0.1.0/tools/kcli.py)
-  and [kpayload.py v0.1.0](https://github.com/kodediy/KodeOS/blob/v0.1.0/tools/kpayload.py).
-- Build and console APIs are documented in official source, **not verified here
-  on a production Dot**. Hardware testing must still demonstrate actual port,
-  firmware identity, command output, screenshots and the post-reset state.
-- Production firmware installation is a separate future feature. App-role
-  `idf.py flash` is redirected by the official SDK, but no MCP write/flash
-  endpoint exists, and raw `esptool` offsets are deliberately disallowed.
-- The host-policy layer is only one safety boundary; external shell tools
-  available to Claude Code are outside this MCP's enforcement.
-- Currently pinned MCP SDK v1.32.2 in the earlier scaffold, with exact npm lock.
-  The newer MCP TypeScript SDK v2 can be evaluated in a separate versioned
-  migration rather than silently changing the package contract mid-PR.
+Evidence is kept in four artefact stages and a four-level test scale. The stages
+`kode_inspect_image` keeps apart are: a source project; a compiled image; an image
+compatible with kodeOS installation (a source-level judgement that now also needs
+`KODEOS_HOME_HOLD` and `KQP_AO_WATCH` to be true in the resolved configuration, 13 checks in
+all); and a device-verified
+image, which is never claimed and always reads `NOT TESTED`. The test levels are L1
+(build), L2 (simulation), L3 (device) and L4 (module integration). No L1 to L4 test record
+exists in the registry. `kode_build` reports observed L1 evidence for the host that ran it,
+and that is not recorded in the registry.
 
-Run `npm test` for injected fake-console tests and an independent MCP client
-protocol test. These test **host control flow**, not actual device behaviour.
+What remains unverified:
+
+- A real build on any host other than the one used. Two real builds passed through
+  `kode_build` (ESP-IDF v6.1.0 at `fff9895c`, template v0.1.0 built against SDK v0.1.1, on
+  Windows 11): commit 46271fa (321 s, image 517680 bytes) and commit b2fe984, the final code
+  (413.6 s, image 517680 bytes, SHA-256
+  `5215c21393a9e45b355d3c15d492870ebbbbc6ea3be82fe9f5b0d2b56c6d3cef`, 13 of 13 inspection
+  checks). An earlier attempt on the final code was BLOCKED (cut short) and was superseded.
+  A grammar-breaking `sdkconfig.defaults` was refused before any build ran. Both are
+  described in the design record. Nothing was flashed or run on a device.
+- Running a preset-file attack through a real `idf.py`: the refusal is tested, and the
+  reading of idf.py comes from its v6.1 source.
+- Kconfig meaning behind accepted lines. Two gates found no disagreement with kconfgen on the
+  accepted forms, but two low, fail-safe findings stay open in the design record: deleting the
+  template's three radio lines is refused, and `CONFIG_APP_NO_BLOBS=y` passes validation and
+  then fails the radio check after the build.
+- Anything on a physical Dot, including what board revision a retail unit reports. The SDK
+  declares `KBSP_BOARD_REV "DVT"`, the only revision the profile knows.
+- All five modules. Electrical data, detection and qualification are `unknown` for each,
+  and four module SDK repositories returned HTTP 404 on 13 November 2026.
+- A v0.1.0 template built against SDK v0.1.1 has built once (see above). The v0.1.0
+  template pinned to SDK v0.1.0 has not been built.
+- The raw flash offset conflict: the template README prints `0x1C00000` while the SDK
+  partition table puts `app_pending` at `0x1A00000`. It is unresolved, no tool uses a raw
+  offset, and `kode_new_app` does not copy that README.
+- Installation, recovery and kodeOS self-update. A Dot can update its own kodeOS to a
+  release nobody assessed, so the installed release must be read from the device.
+
+The host-policy layer is one safety boundary. Shell tools available to Claude Code are
+outside this server's enforcement. Tag-pinned facts expire on 2027-02-11 and upstream
+availability facts on 2026-11-27; after that the tools answer `not_verified` until the
+registry is re-audited. See
+[the design and evidence record](../docs/development/f1-capability-evidence-build.md).
+
+Pinned MCP SDK is v1.32.2 with an exact npm lock. The MCP TypeScript SDK v2 can be
+evaluated in a separate migration.
+
+## Licence boundary
+
+This package is original MIT-licensed TypeScript. Facts about upstream sources are
+recorded; no upstream code is copied. The KodeOS Python scripts, the SDK and the app
+template are GPL-3.0-or-later and are not vendored here: `kode_new_app` reads the
+operator's own template checkout and writes a project that is GPL-3.0-or-later. The server
+runs the manufacturer's console client from the operator's checkout as a separate
+process. Review redistribution and commercial licensing separately.

@@ -1,4 +1,5 @@
-/** Read-only bridge to the pinned, official kodeOS v0.1.0 console client.
+/** Read-only bridge to the operator-pinned official kodeOS console client
+ * (v0.1.1, or the previous assessed release v0.1.0).
  * No raw console input, installer, flashing, radio, or actuator command is exposed.
  */
 import { execFile, type ExecFileOptions } from 'node:child_process';
@@ -57,7 +58,7 @@ export async function validateConsoleConfig(config: ConsoleConfig): Promise<{ sc
   }
   const port = canonicalPort(config.port);
   if (!isAbsolute(config.toolsDir) || !config.python.trim()) {
-    throw new KodeConsoleError('UNCONFIGURED', 'Set absolute KODE_TOOLS_DIR to an official kodeOS v0.1.0 tools checkout and KODE_PYTHON to a trusted Python executable.');
+    throw new KodeConsoleError('UNCONFIGURED', 'Set absolute KODE_TOOLS_DIR to an official kodeOS tools checkout at an assessed release (v0.1.1 or v0.1.0) and KODE_PYTHON to a trusted Python executable.');
   }
   if (!hexSha.test(config.cliSha256) || !hexSha.test(config.payloadSha256)) {
     throw new KodeConsoleError('NO_INTEGRITY_PIN', 'Set the SHA-256 pins for official tools/kcli.py and tools/kpayload.py before enabling console calls.');

@@ -25,12 +25,13 @@ test('independent MCP client sees simulation and disabled read-only console tool
       await client.connect(transport);
       assert.equal(client.getServerVersion()?.name, 'claude-kode-feasibility');
       const { tools } = await client.listTools();
-      assert.deepEqual(tools.map(t => t.name), [
+      // The original five keep their position; the F1 tools follow them.
+      assert.deepEqual(tools.map(t => t.name).slice(0, 5), [
         'inspect_capability', 'kode_ping', 'kode_boot_info',
         'kode_list_apps', 'kode_capture_screen',
       ]);
       assert.equal(tools[0]?.annotations?.readOnlyHint, true);
-      for (const tool of tools.slice(1)) {
+      for (const tool of tools.slice(1, 5)) {
         // Serial attachment can reset the board, so host tool hints must not over-promise.
         assert.equal(tool.annotations?.readOnlyHint, false);
         const result = await client.callTool({ name: tool.name, arguments: {} });

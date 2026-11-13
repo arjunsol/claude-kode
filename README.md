@@ -19,10 +19,18 @@ serial-console protocol. **Source availability is not hardware verification.**
   QP/C Active Objects, embedded `KODE_APP_MANIFEST` and evidence limits.
 - `/claude-kode:new-kode-app` guides generation from the **official tagged
   Kode app template**, not the unreleased historical S3 template.
-- `mcp/` is a TypeScript stdio MCP service with the simulated capability probe
-  and **four opt-in console observations**: ping, boot state, installed apps and
-  a non-persistent screenshot. No installation, flashing, arbitrary CLI commands,
-  radio transmit or motor control is available through MCP.
+- `mcp/` is a TypeScript stdio MCP service (version 0.2.0, 17 tools, 8 resources).
+  It has the simulated capability probe, **four opt-in console observations**
+  (ping, boot state, installed apps, a non-persistent screenshot), eight
+  source-level knowledge tools backed by an evidence registry pinned to
+  kode-sdk and kodeOS **v0.1.1**, and a scaffold, validate, build and inspect pipeline (`kode_new_app`,
+  `kode_validate`, `kode_build`, `kode_inspect_image`). Builds are off until the
+  operator enables them, run only on projects whose build logic is the pinned
+  template's, and are not sandboxed. No installation, flashing, arbitrary CLI commands,
+  radio transmit or motor control is available through MCP. One build has been run
+  against a real ESP-IDF v6.1 (on the final code, commit b2fe984, and on an earlier commit); nothing has
+  run on a device. See the
+  [design and evidence record](docs/development/f1-capability-evidence-build.md).
 - `.mcp.json` registers the local server for Claude Code **after** you have run
   `npm ci && npm run build` in `mcp/`; runtime starts safely with device reads
   **disabled** until explicitly opted in.
@@ -48,8 +56,8 @@ serial-console protocol. **Source availability is not hardware verification.**
    ```
 
 3. The `inspect_capability` fixture is usable without hardware. To use
-   console tools, explicitly configure a pinned official kodeOS v0.1.0 tools
-   checkout and a known Windows COM port; follow [mcp/README.md](mcp/README.md).
+   console tools, explicitly configure a pinned official kodeOS tools
+   checkout (v0.1.1 or v0.1.0) and a known Windows COM port; follow [mcp/README.md](mcp/README.md).
    **Opening serial can reset the Dot.** No auto-discovery or silent connection.
 4. For actual firmware work, use ESP-IDF **v6.1** and the official vendor
    template. The old installer pinned 6.0.1; this branch updates its target to
