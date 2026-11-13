@@ -1,5 +1,8 @@
 # CK-R001: Production P4/C5 hardware and kodeOS contract audit
 
+> **Evidence update (13 November 2026):** This 4 November audit is a **historical pre-release investigation**. Official production kodeOS, kode-sdk and the app template were published as **v0.1.0 on 9 November**, exposing an actual app manifest, console tools and installer/bootloader source. See [production integration](../development/production-sdk-readonly-mcp.md) and [source-audit PR #3](https://github.com/arjunsol/claude-kode/pull/3). The source-discovery obstacle is superseded; actual hardware and five-module HIL qualification remain open. Do not treat the old 'loader unavailable' or 'no manifest' findings as current facts.
+
+
 Date: 2026-11-04. Status: in progress; production loader and hardware qualification blocked on missing evidence. ADR-0004 and ADR-0009 are accepted; acceptance does not close this research.
 
 ## CK-R001 source register
